@@ -81,6 +81,9 @@ mod power;
 #[allow(dead_code)]
 mod virtual_uart_rx_test;
 
+#[allow(dead_code)]
+mod gloc_test;
+
 // State for loading apps.
 
 const NUM_PROCS: usize = 4;
@@ -459,6 +462,7 @@ pub unsafe fn reset_handler() {
     // aes_ccm_test::run();
     // aes_test::run_aes128_ctr();
     // aes_test::run_aes128_cbc();
+    gloc_test::run();
 
     debug!("Initialization complete. Entering main loop");
 

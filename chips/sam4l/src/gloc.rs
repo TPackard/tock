@@ -43,6 +43,36 @@ pub static mut GLOC: Gloc = Gloc {
     ],
 };
 
+impl Gloc {
+    pub fn configure_lut(&mut self, lut: usize, config: u16) {
+        self.luts[lut].configure(config);
+    }
+
+    pub fn enable_lut_input(&mut self, lut: usize, input_num: u8) {
+        self.luts[lut].enable_input(input_num);
+    }
+
+    pub fn disable_lut_input(&mut self, lut: usize, input_num: u8) {
+        self.luts[lut].disable_input(input_num);
+    }
+
+    pub fn disable_lut(&mut self, lut: usize) {
+        self.luts[lut].disable();
+    }
+
+    pub fn is_lut_enabled(&self, lut: usize) -> bool {
+        self.luts[lut].is_enabled()
+    }
+
+    pub fn enable_lut_filter(&mut self, lut: usize) {
+        self.luts[lut].enable_filter();
+    }
+
+    pub fn disable_lut_filter(&mut self, lut: usize) {
+        self.luts[lut].disable_filter();
+    }
+}
+
 pub struct GlocLut {
     registers: StaticRef<GlocRegisters>,
     enabled: Cell<bool>,
