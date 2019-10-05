@@ -7,9 +7,8 @@ use kernel::static_init;
 use kernel::hil::gpio::Configure;
 use kernel::hil::time::{Alarm, AlarmClient, Frequency};
 use sam4l::ast::{Ast, AST};
-use sam4l::gloc::GLOC;
+use sam4l::gloc::{self, GLOC, Lut};
 use sam4l::gpio;
-use sam4l::pm::{self, Clock, PBAClock};
 
 pub unsafe fn run() {
     let alarm = &AST;
@@ -48,33 +47,38 @@ impl<'a, A: Alarm<'a>> GlocTest<'a, A> {
         // Pin to read GLOC output from (wired to gloc_out1).
         let out = &gpio::PC[26];  //D7
 
+        // Pin connected to LED.
+        let led = &gpio::PC[10];
+
         match self.state.get() {
             GlocTestState::Initialization => {
                 // Set up GLOC.
-                pm::enable_clock(Clock::PBA(PBAClock::GLOC));
                 gloc_in4.select_peripheral(gpio::PeripheralFunction::C);
                 gloc_in5.select_peripheral(gpio::PeripheralFunction::C);
                 gloc_in6.select_peripheral(gpio::PeripheralFunction::C);
                 gloc_in7.select_peripheral(gpio::PeripheralFunction::C);
                 gloc_out1.select_peripheral(gpio::PeripheralFunction::C);
                 out.make_input();
+                led.make_output();
+                led.clear();
 
-                GLOC.configure_lut(1, 0b0110_1001_1001_0110);
-                GLOC.enable_lut_input(1, 0);
-                GLOC.enable_lut_input(1, 1);
-                GLOC.enable_lut_input(1, 2);
-                GLOC.enable_lut_input(1, 3);
+                GLOC.enable();
+                GLOC.configure_lut(Lut::Lut2, 0b0110_1001_1001_0110);
+                GLOC.enable_lut_inputs(Lut::Lut2, gloc::IN0 | gloc::IN1 | gloc::IN2 | gloc::IN3);
+                GLOC.disable_lut_inputs(Lut::Lut2, gloc::IN3);
                 //GLOC.enable_lut_filter(0);
 
                 self.state.set(GlocTestState::Test);
                 self.wait(1);
             },
             GlocTestState::Test => {
-                // Print GLOC output once a second.
+                // Print GLOC output once a second. Turn on LED if output is high.
                 if out.read() {
-                    debug!("OUT: 1");
+                    debug!("GLOC OUT1: 1");
+                    led.set();
                 } else {
-                    debug!("OUT: 0");
+                    debug!("GLOC OUT1: 0");
+                    led.clear();
                 }
 
                 self.wait(1);

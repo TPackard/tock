@@ -1,8 +1,8 @@
 //! Implementation of the SAM4L GLOC.
 
-use core::cell::Cell;
 use kernel::common::registers::{register_bitfields, ReadWrite};
 use kernel::common::StaticRef;
+use crate::pm::{self, Clock, PBAClock};
 
 #[repr(C)]
 pub struct GlocRegisters {
@@ -32,108 +32,89 @@ const GLOC_BASE_ADDR: usize = 0x40060000;
 /// The number of bytes between each memory mapped GLOC LUT (Section 36.7).
 const GLOC_LUT_SIZE: usize = 0x8;
 
+pub const IN0: u8 = 0b0001;
+pub const IN1: u8 = 0b0010;
+pub const IN2: u8 = 0b0100;
+pub const IN3: u8 = 0b1000;
+
 pub struct Gloc {
     luts: [GlocLut; 2],
 }
 
 pub static mut GLOC: Gloc = Gloc {
     luts: [
-        GlocLut::new(0),
-        GlocLut::new(1),
+        GlocLut::new(Lut::Lut1),
+        GlocLut::new(Lut::Lut2),
     ],
 };
 
+pub enum Lut {
+    Lut1 = 0,
+    Lut2 = 1
+}
+
 impl Gloc {
-    pub fn configure_lut(&mut self, lut: usize, config: u16) {
-        self.luts[lut].configure(config);
+    pub fn enable(&self) {
+        pm::enable_clock(Clock::PBA(PBAClock::GLOC));
     }
 
-    pub fn enable_lut_input(&mut self, lut: usize, input_num: u8) {
-        self.luts[lut].enable_input(input_num);
+    pub fn disable(&mut self) {
+        self.disable_lut(Lut::Lut1);
+        self.disable_lut(Lut::Lut2);
+        pm::disable_clock(Clock::PBA(PBAClock::GLOC));
     }
 
-    pub fn disable_lut_input(&mut self, lut: usize, input_num: u8) {
-        self.luts[lut].disable_input(input_num);
+    fn lut_registers(&self, lut: Lut) -> &GlocRegisters {
+        &*self.luts[lut as usize].registers
     }
 
-    pub fn disable_lut(&mut self, lut: usize) {
-        self.luts[lut].disable();
+    pub fn configure_lut(&mut self, lut: Lut, config: u16) {
+        let registers = self.lut_registers(lut);
+        registers.truth.write(Truth::TRUTH.val(config as u32));
     }
 
-    pub fn is_lut_enabled(&self, lut: usize) -> bool {
-        self.luts[lut].is_enabled()
+    pub fn enable_lut_inputs(&mut self, lut: Lut, inputs: u8) {
+        let registers = self.lut_registers(lut);
+        let aen: u32 = registers.cr.read(Control::AEN) | (inputs as u32);
+        registers.cr.modify(Control::AEN.val(aen));
     }
 
-    pub fn enable_lut_filter(&mut self, lut: usize) {
-        self.luts[lut].enable_filter();
+    pub fn disable_lut_inputs(&mut self, lut: Lut, inputs: u8) {
+        let registers = self.lut_registers(lut);
+        let aen: u32 = registers.cr.read(Control::AEN) & !(inputs as u32);
+        registers.cr.modify(Control::AEN.val(aen));
     }
 
-    pub fn disable_lut_filter(&mut self, lut: usize) {
-        self.luts[lut].disable_filter();
+    pub fn disable_lut(&mut self, lut: Lut) {
+        let registers = self.lut_registers(lut);
+        registers.truth.write(Truth::TRUTH.val(0));
+        registers.cr.modify(Control::AEN.val(0));
+    }
+
+    pub fn enable_lut_filter(&mut self, lut: Lut) {
+        // TODO: enable GCLK.
+        let registers = self.lut_registers(lut);
+        registers.cr.modify(Control::FILTEN::GlitchFilter);
+    }
+
+    pub fn disable_lut_filter(&mut self, lut: Lut) {
+        let registers = self.lut_registers(lut);
+        registers.cr.modify(Control::FILTEN::NoGlitchFilter);
     }
 }
 
 pub struct GlocLut {
-    registers: StaticRef<GlocRegisters>,
-    enabled: Cell<bool>,
+    registers: StaticRef<GlocRegisters>
 }
 
 impl GlocLut {
-    const fn new(lut_num: usize) -> GlocLut {
+    const fn new(lut: Lut) -> GlocLut {
         GlocLut {
             registers: unsafe {
                 StaticRef::new(
-                    (GLOC_BASE_ADDR + lut_num * GLOC_LUT_SIZE) as *const GlocRegisters
+                    (GLOC_BASE_ADDR + (lut as usize) * GLOC_LUT_SIZE) as *const GlocRegisters
                 )
-            },
-            enabled: Cell::new(false),
-        }
-    }
-
-    pub fn configure(&mut self, config: u16) {
-        let registers: &GlocRegisters = &*self.registers;
-        registers.truth.write(Truth::TRUTH.val(config as u32));
-    }
-
-    pub fn enable_input(&mut self, input_num: u8) {
-        let registers: &GlocRegisters = &*self.registers;
-        let aen: u32 = registers.cr.read(Control::AEN) | 1 << input_num;
-        registers.cr.modify(Control::AEN.val(aen));
-        self.enabled.set(true);
-    }
-
-    pub fn disable_input(&mut self, input_num: u8) {
-        if self.enabled.get() {
-            let registers: &GlocRegisters = &*self.registers;
-            let aen: u32 = registers.cr.read(Control::AEN) & !(1u32 << input_num);
-            registers.cr.modify(Control::AEN.val(aen));
-
-            if aen == 0 {
-                self.enabled.set(false);
             }
         }
-    }
-
-    pub fn disable(&mut self) {
-        if self.enabled.get() {
-            let registers: &GlocRegisters = &*self.registers;
-            registers.cr.modify(Control::AEN.val(0));
-            self.enabled.set(false);
-        }
-    }
-
-    pub fn is_enabled(&self) -> bool {
-        self.enabled.get()
-    }
-
-    pub fn enable_filter(&mut self) {
-        // TODO: make sure that GCLK is enabled.
-        let registers: &GlocRegisters = &*self.registers;
-        registers.cr.modify(Control::FILTEN::GlitchFilter);
-    }
-
-    pub fn disable_filter(&mut self) {
-        let registers: &GlocRegisters = &*self.registers;
-        registers.cr.modify(Control::FILTEN::NoGlitchFilter);
     }
 }
