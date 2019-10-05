@@ -1,5 +1,10 @@
-//! Tests the glue logic controller (GLOC) and affirms that each lookup table
-//! works as expected.
+//! Enables the glue logic controller (GLOC) and allows it to be manually
+//! tested.  The look up table is set to act as a 4-way XOR between the inputs.
+//! The four inputs are pins D3, D4, D5, and RX3; however the input on RX3 is
+//! disabled and should not affect the output.  The GLOC output pin is D2, and
+//! it must be wired to GPIO pin D7 so that the test can read the output value.
+//! The test will check the GLOC output once a second, print the value to the
+//! console, and turn on the LED if the output is high.
 
 use core::cell::Cell;
 use kernel::debug;
@@ -44,7 +49,7 @@ impl<'a, A: Alarm<'a>> GlocTest<'a, A> {
         let gloc_in7 = &gpio::PB[09];  // RX3
         let gloc_out1 = &gpio::PC[31]; // D2
 
-        // Pin to read GLOC output from (wired to gloc_out1).
+        // Pin to read GLOC output from (should be wired to gloc_out1).
         let out = &gpio::PC[26];  //D7
 
         // Pin connected to LED.
@@ -52,7 +57,7 @@ impl<'a, A: Alarm<'a>> GlocTest<'a, A> {
 
         match self.state.get() {
             GlocTestState::Initialization => {
-                // Set up GLOC.
+                // Set up GLOC pins.
                 gloc_in4.select_peripheral(gpio::PeripheralFunction::C);
                 gloc_in5.select_peripheral(gpio::PeripheralFunction::C);
                 gloc_in6.select_peripheral(gpio::PeripheralFunction::C);
@@ -62,11 +67,12 @@ impl<'a, A: Alarm<'a>> GlocTest<'a, A> {
                 led.make_output();
                 led.clear();
 
+                // Enable and configure GLOC.
                 GLOC.enable();
                 GLOC.configure_lut(Lut::Lut2, 0b0110_1001_1001_0110);
                 GLOC.enable_lut_inputs(Lut::Lut2, gloc::IN0 | gloc::IN1 | gloc::IN2 | gloc::IN3);
                 GLOC.disable_lut_inputs(Lut::Lut2, gloc::IN3);
-                //GLOC.enable_lut_filter(0);
+                GLOC.enable_lut_filter(Lut::Lut2);
 
                 self.state.set(GlocTestState::Test);
                 self.wait(1);

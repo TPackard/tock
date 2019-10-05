@@ -1,8 +1,12 @@
-//! Implementation of the SAM4L GLOC.
+//! Implementation of the SAM4L glue logic controller (GLOC).
+//!
+//! GLOC input and output pins must be selected appropriately from table 3-1 in
+//! the SAM4l manual.
 
 use kernel::common::registers::{register_bitfields, ReadWrite};
 use kernel::common::StaticRef;
 use crate::pm::{self, Clock, PBAClock};
+use crate::scif::{self, ClockSource, GenericClock};
 
 #[repr(C)]
 pub struct GlocRegisters {
@@ -22,6 +26,7 @@ register_bitfields![u32,
     ],
 
     Truth [
+        /// Truth table values
         TRUTH OFFSET(0) NUMBITS(16) []
     ]
 ];
@@ -32,89 +37,94 @@ const GLOC_BASE_ADDR: usize = 0x40060000;
 /// The number of bytes between each memory mapped GLOC LUT (Section 36.7).
 const GLOC_LUT_SIZE: usize = 0x8;
 
+/// Bitmasks for selecting the four GLOC inputs.
 pub const IN0: u8 = 0b0001;
 pub const IN1: u8 = 0b0010;
 pub const IN2: u8 = 0b0100;
 pub const IN3: u8 = 0b1000;
 
-pub struct Gloc {
-    luts: [GlocLut; 2],
-}
-
-pub static mut GLOC: Gloc = Gloc {
-    luts: [
-        GlocLut::new(Lut::Lut1),
-        GlocLut::new(Lut::Lut2),
-    ],
-};
-
+/// Available look up tables.
 pub enum Lut {
     Lut1 = 0,
     Lut2 = 1
 }
 
+pub struct Gloc {
+    lut_regs: [StaticRef<GlocRegisters>; 2],
+}
+
+pub static mut GLOC: Gloc = Gloc {
+    lut_regs: [
+        get_lut_reg(Lut::Lut1),
+        get_lut_reg(Lut::Lut2),
+    ],
+};
+
+/// Gets the memory location of the memory-mapped registers of a LUT.
+const fn get_lut_reg(lut: Lut) -> StaticRef<GlocRegisters> {
+    unsafe {
+        StaticRef::new(
+            (GLOC_BASE_ADDR + (lut as usize) * GLOC_LUT_SIZE) as *const GlocRegisters
+        )
+    }
+}
+
 impl Gloc {
+    /// Enables the GLOC by enabling its clock.
     pub fn enable(&self) {
         pm::enable_clock(Clock::PBA(PBAClock::GLOC));
     }
 
+    /// Disables the GLOC by resetting the registers and disabling the clocks.
     pub fn disable(&mut self) {
         self.disable_lut(Lut::Lut1);
         self.disable_lut(Lut::Lut2);
+        scif::generic_clock_disable(GenericClock::GCLK5);
         pm::disable_clock(Clock::PBA(PBAClock::GLOC));
     }
 
+    /// Gets the memory-mapped registers associated with a LUT.
     fn lut_registers(&self, lut: Lut) -> &GlocRegisters {
-        &*self.luts[lut as usize].registers
+        &*self.lut_regs[lut as usize]
     }
 
+    /// Set the truth table values.
     pub fn configure_lut(&mut self, lut: Lut, config: u16) {
         let registers = self.lut_registers(lut);
         registers.truth.write(Truth::TRUTH.val(config as u32));
     }
 
+    /// Enable selected LUT inputs.
     pub fn enable_lut_inputs(&mut self, lut: Lut, inputs: u8) {
         let registers = self.lut_registers(lut);
         let aen: u32 = registers.cr.read(Control::AEN) | (inputs as u32);
         registers.cr.modify(Control::AEN.val(aen));
     }
 
+    /// Disable selected LUT inputs.
     pub fn disable_lut_inputs(&mut self, lut: Lut, inputs: u8) {
         let registers = self.lut_registers(lut);
         let aen: u32 = registers.cr.read(Control::AEN) & !(inputs as u32);
         registers.cr.modify(Control::AEN.val(aen));
     }
 
+    /// Disable LUT by resetting registers.
     pub fn disable_lut(&mut self, lut: Lut) {
         let registers = self.lut_registers(lut);
         registers.truth.write(Truth::TRUTH.val(0));
         registers.cr.modify(Control::AEN.val(0));
     }
 
+    /// Enable filter on output to prevent glitches.
     pub fn enable_lut_filter(&mut self, lut: Lut) {
-        // TODO: enable GCLK.
+        scif::generic_clock_enable(GenericClock::GCLK5, ClockSource::CLK_CPU);
         let registers = self.lut_registers(lut);
         registers.cr.modify(Control::FILTEN::GlitchFilter);
     }
 
+    /// Disable output filter.
     pub fn disable_lut_filter(&mut self, lut: Lut) {
         let registers = self.lut_registers(lut);
         registers.cr.modify(Control::FILTEN::NoGlitchFilter);
-    }
-}
-
-pub struct GlocLut {
-    registers: StaticRef<GlocRegisters>
-}
-
-impl GlocLut {
-    const fn new(lut: Lut) -> GlocLut {
-        GlocLut {
-            registers: unsafe {
-                StaticRef::new(
-                    (GLOC_BASE_ADDR + (lut as usize) * GLOC_LUT_SIZE) as *const GlocRegisters
-                )
-            }
-        }
     }
 }
