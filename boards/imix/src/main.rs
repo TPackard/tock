@@ -462,7 +462,7 @@ pub unsafe fn reset_handler() {
     // aes_ccm_test::run();
     // aes_test::run_aes128_ctr();
     // aes_test::run_aes128_cbc();
-    gloc_test::run();
+    gloc_test::run(mux_alarm);
 
     debug!("Initialization complete. Entering main loop");
 

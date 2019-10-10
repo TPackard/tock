@@ -3,10 +3,10 @@
 //! GLOC input and output pins must be selected appropriately from table 3-1 in
 //! the SAM4l manual.
 
-use kernel::common::registers::{register_bitfields, ReadWrite};
-use kernel::common::StaticRef;
 use crate::pm::{self, Clock, PBAClock};
 use crate::scif::{self, ClockSource, GenericClock};
+use kernel::common::registers::{register_bitfields, ReadWrite};
+use kernel::common::StaticRef;
 
 #[repr(C)]
 pub struct GlocRegisters {
@@ -42,11 +42,15 @@ pub const IN0: u8 = 0b0001;
 pub const IN1: u8 = 0b0010;
 pub const IN2: u8 = 0b0100;
 pub const IN3: u8 = 0b1000;
+pub const IN4: u8 = 0b0001;
+pub const IN5: u8 = 0b0010;
+pub const IN6: u8 = 0b0100;
+pub const IN7: u8 = 0b1000;
 
 /// Available look up tables.
 pub enum Lut {
-    Lut1 = 0,
-    Lut2 = 1
+    Lut0 = 0,
+    Lut1 = 1,
 }
 
 pub struct Gloc {
@@ -54,18 +58,13 @@ pub struct Gloc {
 }
 
 pub static mut GLOC: Gloc = Gloc {
-    lut_regs: [
-        get_lut_reg(Lut::Lut1),
-        get_lut_reg(Lut::Lut2),
-    ],
+    lut_regs: [get_lut_reg(Lut::Lut0), get_lut_reg(Lut::Lut1)],
 };
 
 /// Gets the memory location of the memory-mapped registers of a LUT.
 const fn get_lut_reg(lut: Lut) -> StaticRef<GlocRegisters> {
     unsafe {
-        StaticRef::new(
-            (GLOC_BASE_ADDR + (lut as usize) * GLOC_LUT_SIZE) as *const GlocRegisters
-        )
+        StaticRef::new((GLOC_BASE_ADDR + (lut as usize) * GLOC_LUT_SIZE) as *const GlocRegisters)
     }
 }
 
@@ -77,8 +76,8 @@ impl Gloc {
 
     /// Disables the GLOC by resetting the registers and disabling the clocks.
     pub fn disable(&mut self) {
+        self.disable_lut(Lut::Lut0);
         self.disable_lut(Lut::Lut1);
-        self.disable_lut(Lut::Lut2);
         scif::generic_clock_disable(GenericClock::GCLK5);
         pm::disable_clock(Clock::PBA(PBAClock::GLOC));
     }
@@ -115,7 +114,8 @@ impl Gloc {
         registers.cr.modify(Control::AEN.val(0));
     }
 
-    /// Enable filter on output to prevent glitches.
+    /// Enable filter on output to prevent glitches.  This will delay the given
+    /// LUT's output by 3-4 GCLK cycles.
     pub fn enable_lut_filter(&mut self, lut: Lut) {
         scif::generic_clock_enable(GenericClock::GCLK5, ClockSource::CLK_CPU);
         let registers = self.lut_registers(lut);
