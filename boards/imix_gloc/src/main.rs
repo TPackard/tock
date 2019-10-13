@@ -56,30 +56,10 @@ pub mod io;
 
 // Unit Tests for drivers.
 #[allow(dead_code)]
-mod i2c_dummy;
-#[allow(dead_code)]
-mod icmp_lowpan_test;
-#[allow(dead_code)]
-mod ipv6_lowpan_test;
-#[allow(dead_code)]
-mod spi_dummy;
-#[allow(dead_code)]
-mod udp_lowpan_test;
-
-#[allow(dead_code)]
-mod aes_test;
-
-#[allow(dead_code)]
-mod aes_ccm_test;
-
-#[allow(dead_code)]
-mod rng_test;
-
-#[allow(dead_code)]
 mod power;
 
 #[allow(dead_code)]
-mod virtual_uart_rx_test;
+mod gloc_test;
 
 // State for loading apps.
 
@@ -454,11 +434,7 @@ pub unsafe fn reset_handler() {
     // Once everything is virtualized in the kernel this won't be a problem.
     // -pal, 11/20/18
     //
-    // virtual_uart_rx_test::run_virtual_uart_receive(uart_mux);
-    // rng_test::run_entropy32();
-    // aes_ccm_test::run();
-    // aes_test::run_aes128_ctr();
-    // aes_test::run_aes128_cbc();
+    gloc_test::run(mux_alarm);
 
     debug!("Initialization complete. Entering main loop");
 
