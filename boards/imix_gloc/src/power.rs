@@ -68,32 +68,12 @@ impl<'a> Submodule<'a> {
 }
 
 pub struct SubmoduleConfig {
-    pub rf233: bool,
     pub nrf51422: bool,
     pub sensors: bool,
     pub trng: bool,
 }
 
 pub unsafe fn configure_submodules(enabled_submodules: SubmoduleConfig) {
-    let rf233_detachable_pins = [
-        DetachablePin {
-            pin: &PA[08],
-            function: None,
-        },
-        DetachablePin {
-            pin: &PA[09],
-            function: None,
-        },
-        DetachablePin {
-            pin: &PA[10],
-            function: None,
-        },
-    ];
-    let rf233 = Submodule {
-        gate_pin: &PC[18],
-        detachable_pins: &rf233_detachable_pins,
-    };
-
     let nrf_detachable_pins = [
         DetachablePin {
             pin: &PB[07],
@@ -135,7 +115,6 @@ pub unsafe fn configure_submodules(enabled_submodules: SubmoduleConfig) {
         detachable_pins: &[],
     };
 
-    rf233.power(enabled_submodules.rf233);
     nrf.power(enabled_submodules.nrf51422);
     sensors.power(enabled_submodules.sensors);
     trng.power(enabled_submodules.trng);

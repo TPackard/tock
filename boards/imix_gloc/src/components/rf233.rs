@@ -31,6 +31,7 @@ pub struct RF233Component {
 }
 
 impl RF233Component {
+    #[allow(dead_code)]
     pub fn new(
         spi: &'static VirtualSpiMasterDevice<'static, sam4l::spi::SpiHw>,
         reset: &'static dyn hil::gpio::Pin,

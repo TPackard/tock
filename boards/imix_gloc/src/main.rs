@@ -10,8 +10,6 @@
 
 mod components;
 use capsules::alarm::AlarmDriver;
-use capsules::net::ieee802154::MacAddress;
-use capsules::net::ipv6::ip_utils::IPAddr;
 use capsules::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use capsules::virtual_i2c::MuxI2C;
 use capsules::virtual_spi::{MuxSpiMaster, VirtualSpiMasterDevice};
@@ -19,7 +17,6 @@ use capsules::virtual_uart::MuxUart;
 use kernel::capabilities;
 use kernel::component::Component;
 use kernel::hil;
-use kernel::hil::radio;
 #[allow(unused_imports)]
 use kernel::hil::radio::{RadioConfig, RadioData};
 use kernel::hil::spi::SpiMaster;
@@ -40,12 +37,9 @@ use components::led::LedComponent;
 use components::nonvolatile_storage::NonvolatileStorageComponent;
 use components::nrf51822::Nrf51822Component;
 use components::process_console::ProcessConsoleComponent;
-use components::radio::RadioComponent;
-use components::rf233::RF233Component;
 use components::rng::RngComponent;
 use components::si7021::{HumidityComponent, SI7021Component, TemperatureComponent};
-use components::spi::{SpiComponent, SpiSyscallComponent};
-use components::udp_6lowpan::UDPComponent;
+use components::spi::SpiSyscallComponent;
 use components::usb::UsbComponent;
 
 /// Support routines for debugging I/O.
@@ -64,20 +58,6 @@ mod gloc_test;
 // State for loading apps.
 
 const NUM_PROCS: usize = 4;
-
-// Constants related to the configuration of the 15.4 network stack
-// TODO: Notably, the radio MAC addresses can be configured from userland at the moment
-// We probably want to change this from a security perspective (multiple apps being
-// able to change the MAC address seems problematic), but it is very convenient for
-// development to be able to just flash two corresponding apps onto two devices and
-// have those devices talk to each other without having to modify the kernel flashed
-// onto each device. This makes MAC address configuration a good target for capabilities -
-// only allow one app per board to have control of MAC address configuration?
-const RADIO_CHANNEL: u8 = 26;
-const DST_MAC_ADDR: MacAddress = MacAddress::Short(49138);
-const DEFAULT_CTX_PREFIX_LEN: u8 = 8; //Length of context for 6LoWPAN compression
-const DEFAULT_CTX_PREFIX: [u8; 16] = [0x0 as u8; 16]; //Context for 6LoWPAN Compression
-const PAN_ID: u16 = 0xABCD;
 
 // how should the kernel respond when a process faults
 const FAULT_RESPONSE: kernel::procs::FaultResponse = kernel::procs::FaultResponse::Panic;
@@ -115,8 +95,6 @@ struct Imix {
     spi: &'static capsules::spi::Spi<'static, VirtualSpiMasterDevice<'static, sam4l::spi::SpiHw>>,
     ipc: kernel::ipc::IPC,
     ninedof: &'static capsules::ninedof::NineDof<'static>,
-    radio_driver: &'static capsules::ieee802154::RadioDriver<'static>,
-    udp_driver: &'static capsules::net::udp::UDPDriver<'static>,
     crc: &'static capsules::crc::Crc<'static, sam4l::crccu::Crccu<'static>>,
     usb_driver: &'static capsules::usb_user::UsbSyscallDriver<
         'static,
@@ -125,19 +103,6 @@ struct Imix {
     nrf51822: &'static capsules::nrf51822_serialization::Nrf51822Serialization<'static>,
     nonvolatile_storage: &'static capsules::nonvolatile_storage_driver::NonvolatileStorage<'static>,
 }
-
-// The RF233 radio stack requires our buffers for its SPI operations:
-//
-//   1. buf: a packet-sized buffer for SPI operations, which is
-//      used as the read buffer when it writes a packet passed to it and the write
-//      buffer when it reads a packet into a buffer passed to it.
-//   2. rx_buf: buffer to receive packets into
-//   3 + 4: two small buffers for performing registers
-//      operations (one read, one write).
-
-static mut RF233_BUF: [u8; radio::MAX_BUF_SIZE] = [0x00; radio::MAX_BUF_SIZE];
-static mut RF233_REG_WRITE: [u8; 2] = [0x00; 2];
-static mut RF233_REG_READ: [u8; 2] = [0x00; 2];
 
 impl kernel::Platform for Imix {
     fn with_driver<F, R>(&self, driver_num: usize, f: F) -> R
@@ -159,8 +124,6 @@ impl kernel::Platform for Imix {
             capsules::ninedof::DRIVER_NUM => f(Some(self.ninedof)),
             capsules::crc::DRIVER_NUM => f(Some(self.crc)),
             capsules::usb_user::DRIVER_NUM => f(Some(self.usb_driver)),
-            capsules::ieee802154::DRIVER_NUM => f(Some(self.radio_driver)),
-            capsules::net::udp::DRIVER_NUM => f(Some(self.udp_driver)),
             capsules::nrf51822_serialization::DRIVER_NUM => f(Some(self.nrf51822)),
             capsules::nonvolatile_storage_driver::DRIVER_NUM => f(Some(self.nonvolatile_storage)),
             capsules::rng::DRIVER_NUM => f(Some(self.rng)),
@@ -171,15 +134,15 @@ impl kernel::Platform for Imix {
 }
 
 unsafe fn set_pin_primary_functions() {
-    use sam4l::gpio::PeripheralFunction::{A, B, C, E};
+    use sam4l::gpio::PeripheralFunction::{A, B, E};
     use sam4l::gpio::{PA, PB, PC};
 
     // Right column: Imix pin name
     // Left  column: SAM4L peripheral function
-    PA[04].configure(Some(A)); // AD0         --  ADCIFE AD0
-    PA[05].configure(Some(A)); // AD1         --  ADCIFE AD1
-    PA[06].configure(Some(C)); // EXTINT1     --  EIC EXTINT1
-    PA[07].configure(Some(A)); // AD1         --  ADCIFE AD2
+    PA[04].configure(None); // AD0            --  ADCIFE AD0
+    PA[05].configure(None); // AD1            --  ADCIFE AD1
+    PA[06].configure(None); // EXTINT1        --  EIC EXTINT1
+    PA[07].configure(None); // AD1            --  ADCIFE AD2
     PA[08].configure(None); //... RF233 IRQ   --  GPIO pin
     PA[09].configure(None); //... RF233 RST   --  GPIO pin
     PA[10].configure(None); //... RF233 SLP   --  GPIO pin
@@ -268,7 +231,6 @@ pub unsafe fn reset_handler() {
     let grant_cap = create_capability!(capabilities::MemoryAllocationCapability);
 
     power::configure_submodules(power::SubmoduleConfig {
-        rf233: true,
         nrf51422: true,
         sensors: true,
         trng: true,
@@ -328,16 +290,6 @@ pub unsafe fn reset_handler() {
     sam4l::spi::SPI.init();
 
     let spi_syscalls = SpiSyscallComponent::new(mux_spi).finalize();
-    let rf233_spi = SpiComponent::new(mux_spi).finalize();
-    let rf233 = RF233Component::new(
-        rf233_spi,
-        &sam4l::gpio::PA[09], // reset
-        &sam4l::gpio::PA[10], // sleep
-        &sam4l::gpio::PA[08], // irq
-        &sam4l::gpio::PA[08],
-        RADIO_CHANNEL,
-    )
-    .finalize();
 
     let adc = AdcComponent::new().finalize();
     let gpio = GpioComponent::new(board_kernel).finalize();
@@ -347,49 +299,8 @@ pub unsafe fn reset_handler() {
     let analog_comparator = AcComponent::new().finalize();
     let rng = RngComponent::new(board_kernel).finalize();
 
-    // For now, assign the 802.15.4 MAC address on the device as
-    // simply a 16-bit short address which represents the last 16 bits
-    // of the serial number of the sam4l for this device.  In the
-    // future, we could generate the MAC address by hashing the full
-    // 120-bit serial number
-    let serial_num: sam4l::serial_num::SerialNum = sam4l::serial_num::SerialNum::new();
-    let serial_num_bottom_16 = (serial_num.get_lower_64() & 0x0000_0000_0000_ffff) as u16;
-    let src_mac_from_serial_num: MacAddress = MacAddress::Short(serial_num_bottom_16);
-
-    // Can this initialize be pushed earlier, or into component? -pal
-    rf233.initialize(&mut RF233_BUF, &mut RF233_REG_WRITE, &mut RF233_REG_READ);
-    let (radio_driver, mux_mac) =
-        RadioComponent::new(board_kernel, rf233, PAN_ID, serial_num_bottom_16).finalize();
-
     let usb_driver = UsbComponent::new(board_kernel).finalize();
     let nonvolatile_storage = NonvolatileStorageComponent::new(board_kernel).finalize();
-
-    let local_ip_ifaces = static_init!(
-        [IPAddr; 3],
-        [
-            IPAddr([
-                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
-                0x0e, 0x0f,
-            ]),
-            IPAddr([
-                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
-                0x1e, 0x1f,
-            ]),
-            IPAddr::generate_from_mac(src_mac_from_serial_num),
-        ]
-    );
-
-    let udp_driver = UDPComponent::new(
-        board_kernel,
-        mux_mac,
-        DEFAULT_CTX_PREFIX_LEN,
-        DEFAULT_CTX_PREFIX,
-        DST_MAC_ADDR,
-        src_mac_from_serial_num,
-        local_ip_ifaces,
-        mux_alarm,
-    )
-    .finalize();
 
     let imix = Imix {
         pconsole,
@@ -408,8 +319,6 @@ pub unsafe fn reset_handler() {
         spi: spi_syscalls,
         ipc: kernel::ipc::IPC::new(board_kernel, &grant_cap),
         ninedof,
-        radio_driver,
-        udp_driver,
         usb_driver,
         nrf51822: nrf_serialization,
         nonvolatile_storage: nonvolatile_storage,
@@ -420,11 +329,6 @@ pub unsafe fn reset_handler() {
     // Need to reset the nRF on boot, toggle it's SWDIO
     imix.nrf51822.reset();
     imix.nrf51822.initialize();
-
-    // These two lines need to be below the creation of the chip for
-    // initialization to work.
-    rf233.reset();
-    rf233.start();
 
     imix.pconsole.start();
 

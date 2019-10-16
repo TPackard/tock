@@ -38,14 +38,10 @@ const GLOC_BASE_ADDR: usize = 0x40060000;
 const GLOC_LUT_SIZE: usize = 0x8;
 
 /// Bitmasks for selecting the four GLOC inputs.
-pub const IN0: u8 = 0b0001;
-pub const IN1: u8 = 0b0010;
-pub const IN2: u8 = 0b0100;
-pub const IN3: u8 = 0b1000;
-pub const IN4: u8 = 0b0001;
-pub const IN5: u8 = 0b0010;
-pub const IN6: u8 = 0b0100;
-pub const IN7: u8 = 0b1000;
+pub const IN_0_4: u8 = 0b0001; // IN0/IN4
+pub const IN_1_5: u8 = 0b0010; // IN1/IN5
+pub const IN_2_6: u8 = 0b0100; // IN2/IN6
+pub const IN_3_7: u8 = 0b1000; // IN3/IN7
 
 /// Available look up tables.
 pub enum Lut {
