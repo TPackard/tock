@@ -1,14 +1,23 @@
 //! Enables the glue logic controller (GLOC) and allows it to be manually
-//! tested.  The look up table is set to act as a 4-way XOR between the inputs.
-//! The four inputs are pins D3, D4, D5, and RX3; however the input on RX3 is
-//! disabled and should not affect the output.  The GLOC output pin is D2, and
-//! it must be wired to GPIO pin D7 so that the test can read the output value.
-//! The test will check the GLOC output once a second, print the value to the
-//! console, and turn on the LED if the output is high. NOTE: the RF233 power
-//! jumper must be disconnected in order for LUT 0 to work properly.
+//! tested.  The first look up table is configured as a 4-way xor of its inputs,
+//! and the second table is configured as a 4-way xnor.  The four inputs for the
+//! first lookup table are EXT, A0, A1, and A2.  The output pin is RF233 IRQ,
+//! which should be wired to GPIO pin D6.  The inputs for the second table are
+//! D5, D4, D3, and RX3.  Its output pin is D2, which should be wired to GPIO
+//! pin D7.  The test will check the GLOC output once a second, print the value
+//! to the console, and turn on the LED to reflect the xor of the two tables'
+//! outputs.
+//!
+//! To run the test, first disconnect the RF233 power jumper and add the
+//! following line to the imix boot sequence:
+//! ```
+//!     gloc_test::run(mux_alarm);
+//! ```
+//! You should then see the states of the GLOC output pins printed to the
+//! console and the user LED turned on and off appropriately.
+
 
 use capsules::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
-use core::marker::PhantomData;
 use kernel::debug;
 use kernel::hil::gpio::Configure;
 use kernel::hil::time::{Alarm, AlarmClient, Frequency};
@@ -51,7 +60,6 @@ struct GlocTest<'a, A: Alarm<'a>> {
     out0: &'a gpio::GPIOPin, // Pins to read GLOC output from (should be wired to
     out1: &'a gpio::GPIOPin, // gloc_out0 and gloc_out1, respectively).
     led: &'a gpio::GPIOPin,
-    phantom: PhantomData<&'a A>,
 }
 
 impl<'a, A: Alarm<'a>> GlocTest<'a, A> {
@@ -71,7 +79,6 @@ impl<'a, A: Alarm<'a>> GlocTest<'a, A> {
             out0: &gpio::PC[27],      //D6
             out1: &gpio::PC[26],      //D7
             led: &gpio::PC[10],
-            phantom: PhantomData,
         }
     }
 

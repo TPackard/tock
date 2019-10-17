@@ -338,7 +338,7 @@ pub unsafe fn reset_handler() {
     // Once everything is virtualized in the kernel this won't be a problem.
     // -pal, 11/20/18
     //
-    gloc_test::run(mux_alarm);
+    //gloc_test::run(mux_alarm);
 
     debug!("Initialization complete. Entering main loop");
 
