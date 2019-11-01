@@ -1,50 +1,64 @@
-use kernel::hil::flash::Flash;
 use kernel::ReturnCode;
 
-pub struct BlockStorage<'a, F: Flash + 'static> {
-    flash: &'a F,
+pub type StorageCookie = usize;
+pub type StorageLen = usize;
+
+pub const SEEK_BEGINNING: StorageCookie = 0;
+
+/// A single partition within flash that provides a single storage abstraction.
+pub struct Volume {
+    pub base: usize,
+    pub size: StorageLen,
 }
 
-impl<F: Flash> BlockStorage<'a, F> {
-    pub const fn new(flash: &'a F) -> BlockStorage<'a, F> {
-        BlockStorage {
-            flash,
-        }
-    }
-
-    pub fn read(addr: usize, buf: &'static mut [u8], len: usize) -> ReturnCode {
-        ReturnCode::ENOSUPPORT
-    }
-
-    pub fn write(addr: usize, buf: &'static mut [u8], len: usize) -> ReturnCode {
-        ReturnCode::ENOSUPPORT
-    }
-
-    pub fn erase() -> ReturnCode {
-        ReturnCode::ENOSUPPORT
-    }
-
-    pub fn sync() -> ReturnCode {
-        ReturnCode::ENOSUPPORT
-    }
-
-    pub fn compute_crc(addr: usize, len: usize, crc: u16) -> ReturnCode {
-        ReturnCode::ENOSUPPORT
-    }
-
-    pub fn get_size() -> usize {
-        0
-    }
+pub trait HasClient<'a, C> {
+    /// Set the client for a storage interface. The client will be called when
+    /// operations complete.
+    fn set_client(&'a self, client: &'a C);
 }
 
-pub trait BlockStorageClient {
-    fn read_complete(&self, read_buffer: &'static mut [u8], error: ReturnCode);
+/// An interface for reading from log storage.
+pub trait LogRead {
+    /// Read log data starting from the current read position.
+    fn read(&self, buffer: &'static mut [u8], length: StorageLen) -> ReturnCode;
 
-    fn write_complete(&self, write_buffer: &'static mut [u8], error: ReturnCode);
+    /// Get cookie representing current read position.
+    fn current_offset(&self) -> StorageCookie;
 
-    fn erase_complete(&self, error: ReturnCode);
+    /// Seek to a new read position.
+    fn seek(&self, offset: StorageCookie) -> ReturnCode;
 
-    fn sync_complete(&self, error: ReturnCode);
+    /// Get approximate log capacity in bytes.
+    fn get_size(&self) -> StorageLen;
+}
 
-    fn compute_crc_complete(&self, crc: u16, error: ReturnCode);
+/// Receive callbacks from `LogRead`.
+pub trait LogReadClient {
+    fn read_done(&self, buffer: &'static mut [u8], length: StorageLen, error: ReturnCode);
+
+    fn seek_done(&self, error: ReturnCode);
+}
+
+/// An interface for writing to log storage.
+pub trait LogWrite {
+    /// Append bytes to the end of the log.
+    fn append(&self, buffer: &'static mut [u8], length: StorageLen) -> ReturnCode;
+
+    /// Get cookie representing current append position.
+    fn current_offset(&self) -> StorageCookie;
+
+    /// Erase the entire log.
+    fn erase(&self) -> ReturnCode;
+
+    /// Sync log to storage.
+    fn sync(&self) -> ReturnCode;
+}
+
+/// Receive callbacks from `LogWrite`.
+pub trait LogWriteClient {
+    fn append_done(&self, buffer: &'static mut [u8], length: StorageLen, records_lost: bool, error: ReturnCode);
+
+    fn erase_done(&self, error: ReturnCode);
+
+    fn sync_done(&self, error: ReturnCode);
 }
