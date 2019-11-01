@@ -56,7 +56,13 @@ pub trait LogWrite {
 
 /// Receive callbacks from `LogWrite`.
 pub trait LogWriteClient {
-    fn append_done(&self, buffer: &'static mut [u8], length: StorageLen, records_lost: bool, error: ReturnCode);
+    fn append_done(
+        &self,
+        buffer: &'static mut [u8],
+        length: StorageLen,
+        records_lost: bool,
+        error: ReturnCode,
+    );
 
     fn erase_done(&self, error: ReturnCode);
 
