@@ -5,12 +5,6 @@ pub type StorageLen = usize;
 
 pub const SEEK_BEGINNING: StorageCookie = 0;
 
-/// A single partition within flash that provides a single storage abstraction.
-pub struct Volume {
-    pub base: usize,
-    pub size: StorageLen,
-}
-
 pub trait HasClient<'a, C> {
     /// Set the client for a storage interface. The client will be called when
     /// operations complete.
