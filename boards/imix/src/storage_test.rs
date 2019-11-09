@@ -24,16 +24,17 @@ pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
     // Set up flash controller and NV to pages interface on top of it.
     flashcalw::FLASH_CONTROLLER.configure();
     pub static mut PAGEBUFFER: flashcalw::Sam4lPage = flashcalw::Sam4lPage::new();
+    pub static mut DELETE_ME: flashcalw::Sam4lPage = flashcalw::Sam4lPage::new();
     let nv_to_pages = static_init!(
         NonvolatileToPages<'static, flashcalw::FLASHCALW>,
-        NonvolatileToPages::new(&mut flashcalw::FLASH_CONTROLLER, &mut PAGEBUFFER)
+        NonvolatileToPages::new(&mut flashcalw::FLASH_CONTROLLER, &mut DELETE_ME)
     );
     flash::HasClient::set_client(&flashcalw::FLASH_CONTROLLER, nv_to_pages);
 
     // Create actual log storage abstraction.
     let log_storage = static_init!(
         LogStorage,
-        log_storage::LogStorage::new(true, &TEST_LOG, nv_to_pages)
+        log_storage::LogStorage::new(&mut flashcalw::FLASH_CONTROLLER, &mut PAGEBUFFER, true, &TEST_LOG, nv_to_pages)
     );
     nv_to_pages.set_client(log_storage);
 
