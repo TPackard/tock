@@ -2,7 +2,6 @@
 /// work right now.
 
 use capsules::log_storage;
-use capsules::nonvolatile_to_pages::NonvolatileToPages;
 use capsules::storage_interface::{self, LogRead, LogReadClient, LogWrite, LogWriteClient, StorageLen};
 use capsules::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use core::cell::Cell;
@@ -10,7 +9,6 @@ use kernel::common::cells::TakeCell;
 use kernel::storage_volume;
 use kernel::debug;
 use kernel::hil::flash;
-use kernel::hil::nonvolatile_storage::NonvolatileStorage;
 use kernel::hil::time::{Alarm, AlarmClient, Frequency};
 use kernel::static_init;
 use kernel::ReturnCode;
@@ -21,22 +19,16 @@ use sam4l::flashcalw;
 storage_volume!(TEST_LOG, 2);
 
 pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
-    // Set up flash controller and NV to pages interface on top of it.
+    // Set up flash controller.
     flashcalw::FLASH_CONTROLLER.configure();
     pub static mut PAGEBUFFER: flashcalw::Sam4lPage = flashcalw::Sam4lPage::new();
-    pub static mut DELETE_ME: flashcalw::Sam4lPage = flashcalw::Sam4lPage::new();
-    let nv_to_pages = static_init!(
-        NonvolatileToPages<'static, flashcalw::FLASHCALW>,
-        NonvolatileToPages::new(&mut flashcalw::FLASH_CONTROLLER, &mut DELETE_ME)
-    );
-    flash::HasClient::set_client(&flashcalw::FLASH_CONTROLLER, nv_to_pages);
 
-    // Create actual log storage abstraction.
+    // Create actual log storage abstraction on top of flash.
     let log_storage = static_init!(
         LogStorage,
-        log_storage::LogStorage::new(&mut flashcalw::FLASH_CONTROLLER, &mut PAGEBUFFER, true, &TEST_LOG, nv_to_pages)
+        log_storage::LogStorage::new(&TEST_LOG, &mut flashcalw::FLASH_CONTROLLER, &mut PAGEBUFFER, true)
     );
-    nv_to_pages.set_client(log_storage);
+    flash::HasClient::set_client(&flashcalw::FLASH_CONTROLLER, log_storage);
 
     // Create and run test for log storage.
     let log_storage_test = static_init!(
