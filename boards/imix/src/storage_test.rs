@@ -15,10 +15,18 @@ use kernel::ReturnCode;
 use sam4l::ast::Ast;
 use sam4l::flashcalw;
 
-// Allocate 2kB volume for log storage.
+// Allocate 1kB volume for log storage.
 storage_volume!(TEST_LOG, 2);
 
 pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
+    // TODO: figure out why this is not properly aligned.
+    let storage_offset = 512 - TEST_LOG.as_ptr() as usize % 512;
+    debug!(
+        "STORAGE VOLUME PHYSICALLY STARTS AT {:?}, offsetting by {}",
+        TEST_LOG.as_ptr(),
+        storage_offset
+    );
+
     // Set up flash controller.
     flashcalw::FLASH_CONTROLLER.configure();
     pub static mut PAGEBUFFER: flashcalw::Sam4lPage = flashcalw::Sam4lPage::new();
@@ -26,7 +34,7 @@ pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
     // Create actual log storage abstraction on top of flash.
     let log_storage = static_init!(
         LogStorage,
-        log_storage::LogStorage::new(&TEST_LOG, &mut flashcalw::FLASH_CONTROLLER, &mut PAGEBUFFER, true)
+        log_storage::LogStorage::new(&TEST_LOG[storage_offset..storage_offset+1536], &mut flashcalw::FLASH_CONTROLLER, &mut PAGEBUFFER, true)
     );
     flash::HasClient::set_client(&flashcalw::FLASH_CONTROLLER, log_storage);
 
@@ -44,7 +52,7 @@ pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
 // Buffer for reading from and writing to in the storage tests.
 static mut BUFFER: [u8; 8] = [0; 8];
 // Length of buffer to actually use.
-const BUFFER_LEN: usize = 8;
+const BUFFER_LEN: usize = 7;
 // Time to wait in between storage operations.
 const WAIT_MS: u32 = 5;
 
