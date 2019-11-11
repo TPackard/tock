@@ -78,7 +78,7 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
             buffer: TakeCell::new(buffer),
             alarm,
             state: Cell::new(TestState::Write),
-            val: Cell::new(0),
+            val: Cell::new(0x0102030405060708),
         }
     }
 
@@ -104,7 +104,6 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
                             debug!("WRITE FAILED: {:?}", status);
                         }
                     });
-                self.val.set(self.val.get() + 1);
             }
         }
     }
@@ -119,8 +118,18 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
 impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
     fn read_done(&self, buffer: &'static mut [u8], _length: StorageLen, _error: ReturnCode) {
         debug!("READ DONE: {:?}", buffer);
+
+        // Verify correct value was read.
+        let expected = self.val.get().to_be_bytes();
+        for i in 0..8 {
+            if buffer[i] != expected[i] {
+                panic!("Expected {:?}, read {:?}", expected, buffer);
+            }
+        }
+
         self.buffer.replace(buffer);
         self.state.set(TestState::Write);
+        self.val.set(self.val.get() + (1<<(8*(8-BUFFER_LEN))));
         self.wait(WAIT_MS);
     }
 
