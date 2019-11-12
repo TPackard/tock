@@ -16,9 +16,13 @@ enum State {
     Write,
 }
 
-/// TODO: Maybe have a page buffer in memory for read and write pages? Not sure if this would
-/// occupy too much memory, but it would be more efficient than using NonvolatileToPages to
-/// read/write arbitrary data for every operation.
+struct Metadata {
+    magic: u16,
+    valid_bytes: u16,
+    crc: u32,
+    position: StorageCookie,
+}
+
 pub struct LogStorage<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> {
     /// Underlying storage volume.
     volume: &'static [u8],
@@ -26,12 +30,13 @@ pub struct LogStorage<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient>
     driver: &'a F,
     /// Buffer for a flash page.
     pagebuffer: TakeCell<'static, F::Page>,
+    /// Size of a flash page.
+    page_size: usize,
     /// Whether or not the log is circular.
-    circular: Cell<bool>, // TODO: Since this is constant, should it really be a Cell?
+    circular: bool,
     /// Client using LogStorage.
     client: OptionalCell<&'a C>,
 
-    // TODO: make sure this auxiliary data is appropriate.
     /// TODO: do I actually really need state?
     state: Cell<State>,
     /// Offset within volume to read from.
@@ -44,7 +49,7 @@ pub struct LogStorage<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient>
     /// Client-provided buffer to write from.
     buffer: TakeCell<'static, [u8]>,
     /// Offset of unwritten data within buffer.
-    buffer_offset: Cell<usize>,
+    buffer_offset: Cell<StorageLen>,
     /// Length of data to write from buffer.
     length: Cell<StorageLen>,
 }
@@ -57,11 +62,13 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
         circular: bool,
     ) -> LogStorage<'a, F, C> {
         debug!("LOG STORAGE VOLUME STARTS AT {:?}", volume.as_ptr());
+        let page_size = pagebuffer.as_mut().len();
         let log_storage: LogStorage<'a, F, C> = LogStorage {
             volume,
             driver,
             pagebuffer: TakeCell::new(pagebuffer),
-            circular: Cell::new(circular),
+            page_size,
+            circular,
             client: OptionalCell::empty(),
             state: Cell::new(State::Idle),
             read_offset: Cell::new(SEEK_BEGINNING),
@@ -76,7 +83,6 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
     }
 
     fn read_chunk(&self, buffer: &mut [u8], length: usize, buffer_offset: usize) {
-        // TODO: abstract shit here, the other stuff is broken thanks to pagebuffer take.
         self.pagebuffer.take().map(move |pagebuffer| {
             let mut read_offset = self.read_offset.get();
             let page_size = pagebuffer.as_mut().len();
@@ -88,14 +94,13 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
                 if volume_offset / page_size == buffer_page_number {
                     buffer[buffer_offset + offset] = pagebuffer.as_mut()[volume_offset % page_size];
                 } else {
-                    debug!("V");
                     buffer[buffer_offset + offset] = self.volume[volume_offset];
                 }
             }
 
             // Update read offset.
             read_offset += length;
-            if read_offset >= self.volume.len() && self.circular.get() {
+            if read_offset >= self.volume.len() && self.circular {
                 read_offset = SEEK_BEGINNING;
                 debug!("READ WRAPPING");
             }
@@ -110,7 +115,6 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
         let page_size = pagebuffer.as_mut().len();
         let mut append_offset = self.append_offset.get();
         let buffer_offset = self.buffer_offset.get();
-        let page_number = (self.volume.as_ptr() as usize + append_offset) / page_size;
 
         // Copy data to pagebuffer.
         // TODO: oPTiMizE
@@ -122,7 +126,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
 
         // Increment append and buffer offset by number of bytes appended.
         append_offset += bytes_to_append;
-        if append_offset >= self.volume.len() && self.circular.get() {
+        if append_offset >= self.volume.len() && self.circular {
             // Reset offset to start of volume if circular and the end is reached.
             append_offset = SEEK_BEGINNING;
             self.records_lost.set(true);
@@ -153,18 +157,29 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
 
         // Flush page if full.
         if flush_page {
-            // TODO: what do if writing fails?
-            let shit = pagebuffer.as_mut();
-            debug!(
-                "Syncing: {:?}...{:?} ({})",
-                &shit[0..16],
-                &shit[496..512],
-                page_number
-            );
-            let status = self.driver.write_page(page_number, pagebuffer);
+            // TODO: what do if flushing fails?
+            let status = self.flush_pagebuffer(pagebuffer);
         } else {
             self.pagebuffer.replace(pagebuffer);
         }
+    }
+
+    fn flush_pagebuffer(&self, pagebuffer: &'static mut F::Page) -> ReturnCode {
+        let mut offset = self.append_offset.get();
+        if offset == SEEK_BEGINNING {
+            offset = self.volume.len();
+        }
+        let page_number = (self.volume.as_ptr() as usize + offset - 1) / self.page_size;
+
+        // TODO: what do if flushing fails?
+        let shit = pagebuffer.as_mut();
+        debug!(
+            "Syncing: {:?}...{:?} ({})",
+            &shit[0..16],
+            &shit[496..512],
+            page_number
+        );
+        self.driver.write_page(page_number, pagebuffer)
     }
 }
 
@@ -194,12 +209,12 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogRead for LogS
             // TODO: shouldn't be able to read beyond append position.
             let bytes_to_read = core::cmp::min(length, self.volume.len() - self.read_offset.get());
             self.read_chunk(buffer, bytes_to_read, 0);
-            if bytes_to_read < length && self.circular.get() {
+            if bytes_to_read < length && self.circular {
                 // Read extends beyond end of circular volume.
                 // TODO: what if first read read beyond the end of the log boundaries?
                 debug!("READ WRAP {} bytes", length - bytes_to_read);
                 self.read_chunk(buffer, length - bytes_to_read, bytes_to_read);
-            } else if bytes_to_read < length && !self.circular.get() {
+            } else if bytes_to_read < length && !self.circular {
                 // TODO: THIS SHOULDN'T BE ALLOWED TO HAPPEN (but it is)!
                 unreachable!();
             }
@@ -210,7 +225,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogRead for LogS
 
             ReturnCode::SUCCESS
         } else {
-            debug_assert!(!self.circular.get());
+            debug_assert!(!self.circular);
             ReturnCode::FAIL
         }
     }
@@ -244,7 +259,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
             return ReturnCode::SUCCESS;
         } else if self.state.get() != State::Idle {
             return ReturnCode::EBUSY;
-        } else if buffer.len() < length {
+        } else if buffer.len() < length || length > self.volume.len() {
             return ReturnCode::EINVAL;
         }
 
@@ -260,7 +275,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
                 ReturnCode::SUCCESS
             })
         } else {
-            debug_assert!(!self.circular.get());
+            debug_assert!(!self.circular);
             ReturnCode::FAIL
         }
     }
@@ -279,19 +294,34 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
     }
 
     fn sync(&self) -> ReturnCode {
-        // TODO: update this since there's actually a pagebuffer to sync now.
-        self.client.map(move |client| client.sync_done(ReturnCode::SUCCESS));
-        ReturnCode::SUCCESS
+        let append_offset = self.append_offset.get();
+        if append_offset % self.page_size == 0 {
+            self.client.map(move |client| client.sync_done(ReturnCode::SUCCESS));
+            ReturnCode::SUCCESS
+        } else {
+            let status = self.pagebuffer.take().map_or(ReturnCode::FAIL, move |pagebuffer| {
+                self.flush_pagebuffer(pagebuffer)
+            });
+
+            // Advance read offset if invalidated.
+            if status == ReturnCode::SUCCESS {
+                let read_offset = self.read_offset.get();
+                if read_offset > append_offset && read_offset / self.page_size == append_offset / self.page_size {
+                    self.read_offset.set(read_offset + self.page_size - read_offset % self.page_size);
+                }
+            }
+
+            status
+        }
     }
 }
 
 impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F> for LogStorage<'a, F, C> {
-    /// Flash read complete.
     fn read_complete(&self, _read_buffer: &'static mut F::Page, _error: flash::Error) {
-        // TODO: need to handle reads if syncing a non-full pagebuffer.
+        // Reads are made directly from the storage volume, not through the flash interface.
+        unreachable!();
     }
 
-    /// Flash write complete.
     fn write_complete(&self, write_buffer: &'static mut F::Page, error: flash::Error) {
         // TODO: what if first write wrote beyond the end of the log boundaries?
         // TODO: increment read offset if invalidated by write.
@@ -330,8 +360,8 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
         }
     }
 
-    /// Flash erase complete.
     fn erase_complete(&self, _error: flash::Error) {
-        // TODO remember to error check.
+        // TODO: are erases necessary?
+        unreachable!();
     }
 }

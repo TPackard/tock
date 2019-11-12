@@ -54,7 +54,7 @@ static mut BUFFER: [u8; 8] = [0; 8];
 // Length of buffer to actually use.
 const BUFFER_LEN: usize = 7;
 // Time to wait in between storage operations.
-const WAIT_MS: u32 = 5;
+const WAIT_MS: u32 = 7;
 
 #[derive(Clone, Copy, PartialEq)]
 enum TestState {
