@@ -1,16 +1,17 @@
 /// Yeah, so this should test the various storage abstractions that I'm going to make. It doesn't
 /// work right now.
-
 use capsules::log_storage;
-use capsules::storage_interface::{self, LogRead, LogReadClient, LogWrite, LogWriteClient, StorageLen};
+use capsules::storage_interface::{
+    self, LogRead, LogReadClient, LogWrite, LogWriteClient, StorageLen,
+};
 use capsules::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use core::cell::Cell;
 use kernel::common::cells::TakeCell;
-use kernel::storage_volume;
 use kernel::debug;
 use kernel::hil::flash;
 use kernel::hil::time::{Alarm, AlarmClient, Frequency};
 use kernel::static_init;
+use kernel::storage_volume;
 use kernel::ReturnCode;
 use sam4l::ast::Ast;
 use sam4l::flashcalw;
@@ -34,7 +35,12 @@ pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
     // Create actual log storage abstraction on top of flash.
     let log_storage = static_init!(
         LogStorage,
-        log_storage::LogStorage::new(&TEST_LOG[storage_offset..storage_offset+1536], &mut flashcalw::FLASH_CONTROLLER, &mut PAGEBUFFER, true)
+        log_storage::LogStorage::new(
+            &TEST_LOG[storage_offset..storage_offset + 1536],
+            &mut flashcalw::FLASH_CONTROLLER,
+            &mut PAGEBUFFER,
+            true
+        )
     );
     flash::HasClient::set_client(&flashcalw::FLASH_CONTROLLER, log_storage);
 
@@ -62,7 +68,11 @@ enum TestState {
     Write,
 }
 
-type LogStorage = log_storage::LogStorage<'static, flashcalw::FLASHCALW, LogStorageTest<VirtualMuxAlarm<'static, Ast<'static>>>>;
+type LogStorage = log_storage::LogStorage<
+    'static,
+    flashcalw::FLASHCALW,
+    LogStorageTest<VirtualMuxAlarm<'static, Ast<'static>>>,
+>;
 struct LogStorageTest<A: Alarm<'static>> {
     storage: &'static LogStorage,
     buffer: TakeCell<'static, [u8]>,
@@ -85,25 +95,21 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
     fn run(&self) {
         match self.state.get() {
             TestState::Read => {
-                self.buffer
-                    .take()
-                    .map(move |buffer| {
-                        let status = self.storage.read(buffer, BUFFER_LEN);
-                        if status != ReturnCode::SUCCESS {
-                            debug!("READ FAILED: {:?}", status);
-                        }
-                    });
-            },
+                self.buffer.take().map(move |buffer| {
+                    let status = self.storage.read(buffer, BUFFER_LEN);
+                    if status != ReturnCode::SUCCESS {
+                        debug!("READ FAILED: {:?}", status);
+                    }
+                });
+            }
             TestState::Write => {
-                self.buffer
-                    .take()
-                    .map(move |buffer| {
-                        buffer.clone_from_slice(&self.val.get().to_be_bytes());
-                        let status = self.storage.append(buffer, BUFFER_LEN);
-                        if status != ReturnCode::SUCCESS {
-                            debug!("WRITE FAILED: {:?}", status);
-                        }
-                    });
+                self.buffer.take().map(move |buffer| {
+                    buffer.clone_from_slice(&self.val.get().to_be_bytes());
+                    let status = self.storage.append(buffer, BUFFER_LEN);
+                    if status != ReturnCode::SUCCESS {
+                        debug!("WRITE FAILED: {:?}", status);
+                    }
+                });
             }
         }
     }
@@ -129,12 +135,11 @@ impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
 
         self.buffer.replace(buffer);
         self.state.set(TestState::Write);
-        self.val.set(self.val.get() + (1<<(8*(8-BUFFER_LEN))));
+        self.val.set(self.val.get() + (1 << (8 * (8 - BUFFER_LEN))));
         self.wait(WAIT_MS);
     }
 
-    fn seek_done(&self, _error: ReturnCode) {
-    }
+    fn seek_done(&self, _error: ReturnCode) {}
 }
 
 impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
@@ -151,11 +156,9 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
         self.wait(WAIT_MS);
     }
 
-    fn erase_done(&self, _error: ReturnCode) {
-    }
+    fn erase_done(&self, _error: ReturnCode) {}
 
-    fn sync_done(&self, _error: ReturnCode) {
-    }
+    fn sync_done(&self, _error: ReturnCode) {}
 }
 
 impl<A: Alarm<'static>> AlarmClient for LogStorageTest<A> {
