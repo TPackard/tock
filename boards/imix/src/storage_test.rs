@@ -60,7 +60,7 @@ static mut BUFFER: [u8; 8] = [0; 8];
 // Length of buffer to actually use.
 const BUFFER_LEN: usize = 7;
 // Time to wait in between storage operations.
-const WAIT_MS: u32 = 10;
+const WAIT_MS: u32 = 2;
 
 #[derive(Clone, Copy, PartialEq)]
 enum TestState {
@@ -98,19 +98,30 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
         match self.state.get() {
             TestState::Read => {
                 self.buffer.take().map(move |buffer| {
-                    let status = self.storage.read(buffer, BUFFER_LEN);
-                    if status == ReturnCode::FAIL {
-                    } else if status != ReturnCode::SUCCESS {
-                        debug!("READ FAILED: {:?}", status);
+                    if let Err((error, original_buffer)) = self.storage.read(buffer, BUFFER_LEN) {
+                        self.buffer.replace(original_buffer);
+                        if error == ReturnCode::FAIL {
+                            // No more entries, start writing again.
+                            debug!(
+                                "READ OFFSET: {} / WRITE OFFSET: {}",
+                                self.storage.current_read_offset(),
+                                self.storage.current_append_offset()
+                            );
+                            debug!("RESUME WRITE");
+                            self.state.set(TestState::Write);
+                            self.run();
+                        } else if error != ReturnCode::SUCCESS {
+                            debug!("READ FAILED: {:?}", error);
+                        }
                     }
                 });
             }
             TestState::Write => {
                 self.buffer.take().map(move |buffer| {
                     buffer.clone_from_slice(&self.write_val.get().to_be_bytes());
-                    let status = self.storage.append(buffer, BUFFER_LEN);
-                    if status != ReturnCode::SUCCESS {
-                        debug!("WRITE FAILED: {:?}", status);
+                    if let Err((error, original_buffer)) = self.storage.append(buffer, BUFFER_LEN) {
+                        self.buffer.replace(original_buffer);
+                        debug!("WRITE FAILED: {:?}", error);
                     }
                 });
             }
@@ -128,8 +139,6 @@ impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
     fn read_done(&self, buffer: &'static mut [u8], _length: StorageLen, error: ReturnCode) {
         match error {
             ReturnCode::SUCCESS => {
-                debug!("READ DONE: {:?}", buffer);
-
                 // Verify correct value was read.
                 let expected = self.read_val.get().to_be_bytes();
                 for i in 0..8 {
@@ -142,18 +151,6 @@ impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
                 self.read_val
                     .set(self.read_val.get() + (1 << (8 * (8 - BUFFER_LEN))));
                 self.wait(WAIT_MS);
-            }
-            ReturnCode::FAIL => {
-                // No more entries, start writing again.
-                debug!(
-                    "READ OFFSET: {} / WRITE OFFSET: {}",
-                    self.storage.current_read_offset(),
-                    self.storage.current_append_offset()
-                );
-                debug!("RESUME WRITE");
-                self.state.set(TestState::Write);
-                self.buffer.replace(buffer);
-                self.run();
             }
             _ => self.wait(WAIT_MS),
         }
@@ -170,10 +167,9 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
         _records_lost: bool,
         _error: ReturnCode,
     ) {
-        debug!("WRITE DONE");
         self.buffer.replace(buffer);
 
-        if (self.write_val.get() >> (8 * (8 - BUFFER_LEN))) % 80 == 0 {
+        if (self.write_val.get() >> (8 * (8 - BUFFER_LEN))) % 120 == 0 {
             debug!(
                 "READ OFFSET: {} / WRITE OFFSET: {}",
                 self.storage.current_read_offset(),

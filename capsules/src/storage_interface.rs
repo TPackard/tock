@@ -15,7 +15,11 @@ pub trait HasClient<'a, C> {
 /// An interface for reading from log storage.
 pub trait LogRead {
     /// Read log data starting from the current read position.
-    fn read(&self, buffer: &'static mut [u8], length: StorageLen) -> ReturnCode;
+    fn read(
+        &self,
+        buffer: &'static mut [u8],
+        length: StorageLen,
+    ) -> Result<(), (ReturnCode, &'static mut [u8])>;
 
     /// Get cookie representing current read position.
     fn current_read_offset(&self) -> StorageCookie;
@@ -37,7 +41,11 @@ pub trait LogReadClient {
 /// An interface for writing to log storage.
 pub trait LogWrite {
     /// Append bytes to the end of the log.
-    fn append(&self, buffer: &'static mut [u8], length: StorageLen) -> ReturnCode;
+    fn append(
+        &self,
+        buffer: &'static mut [u8],
+        length: StorageLen,
+    ) -> Result<(), (ReturnCode, &'static mut [u8])>;
 
     /// Get cookie representing current append position.
     fn current_append_offset(&self) -> StorageCookie;

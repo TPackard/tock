@@ -126,7 +126,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
         // oldest entries and should be read from flash. This accounts for when the pagebuffer
         // hasn't been flushed and the page it represents still contains older data on flash.
         if self.page_number(cookie) == self.page_number(self.append_position.get())
-            && cookie > self.append_position.get() - self.page_size
+            && cookie + self.page_size > self.append_position.get()
         {
             pagebuffer.as_mut()
         } else {
@@ -242,8 +242,12 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
 
     /// Appends data from a buffer onto the end of the log. Requires that there is enough space
     /// remaining in the pagebuffer for the entry (including metadata).
-    fn append_entry(&self, buffer: &'static mut [u8], pagebuffer: &'static mut F::Page) {
-        let length = self.length.get();
+    fn append_entry(
+        &self,
+        buffer: &'static mut [u8],
+        length: usize,
+        pagebuffer: &'static mut F::Page,
+    ) {
         let append_position = self.append_position.get();
         let mut page_offset = append_position % self.page_size;
 
@@ -267,8 +271,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
             self.client.map(move |client| {
                 client.append_done(buffer, length, self.records_lost(), ReturnCode::SUCCESS)
             });
-            // TODO: what to do if flush fails?
-            let status = self.flush_pagebuffer(pagebuffer, self.page_number(append_position));
+            self.flush_pagebuffer(pagebuffer, self.page_number(append_position));
         } else {
             // Replace pagebuffer and callback client.
             self.state.set(State::Idle);
@@ -293,7 +296,6 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
 
     /// Writes the page header and flushes the pagebuffer to flash.
     fn flush_pagebuffer(&self, pagebuffer: &'static mut F::Page, page_number: usize) -> ReturnCode {
-        // TODO: need to erase before writing...
         // Write page metadata to pagebuffer.
         let page_header = self.page_header.get();
         let mut index = 0;
@@ -308,9 +310,10 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
             pagebuffer.as_mut()[append_position % self.page_size] = PAD_BYTE;
             append_position += 1;
         }
+        // TODO: what if page is synced, not filled?
         self.append_position.set(append_position + PAGE_HEADER_SIZE);
+        // TODO: increment read offset if invalidated by write.
 
-        // TODO: what do if flushing fails?
         let shit = pagebuffer.as_mut();
         debug!(
             "Syncing: {:?}...{:?} ({})",
@@ -318,6 +321,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
             &shit[496..512],
             page_number
         );
+        // TODO: what do if flushing fails? Need to handle.
         self.driver.write_page(page_number, pagebuffer)
     }
 
@@ -340,11 +344,15 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> HasClient<'a, C>
 
 impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogRead for LogStorage<'a, F, C> {
     /// Read a log entry into a buffer.
-    fn read(&self, buffer: &'static mut [u8], length: usize) -> ReturnCode {
+    fn read(
+        &self,
+        buffer: &'static mut [u8],
+        length: usize,
+    ) -> Result<(), (ReturnCode, &'static mut [u8])> {
         if self.state.get() != State::Idle {
-            return ReturnCode::EBUSY;
+            return Err((ReturnCode::EBUSY, buffer));
         } else if buffer.len() < length {
-            return ReturnCode::EINVAL;
+            return Err((ReturnCode::EINVAL, buffer));
         }
 
         // Ensure end of log hasn't been reached.
@@ -352,21 +360,16 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogRead for LogS
         // TODO: incorrect calculation of storage capacity. Replace this with ability to detect end
         // of log, regardless of whether or not it's circular.
         if !self.circular && read_position + length >= self.volume.len() {
-            ReturnCode::FAIL
+            Err((ReturnCode::FAIL, buffer))
         } else {
             match self.read_entry(buffer, length) {
                 Ok(bytes_read) => {
                     self.client.map(move |client| {
                         client.read_done(buffer, bytes_read, ReturnCode::SUCCESS);
                     });
-                    ReturnCode::SUCCESS
+                    Ok(())
                 }
-                Err(return_code) => {
-                    self.client.map(move |client| {
-                        client.read_done(buffer, 0, return_code);
-                    });
-                    return_code
-                }
+                Err(return_code) => Err((return_code, buffer)),
             }
         }
     }
@@ -395,46 +398,52 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogRead for LogS
 impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for LogStorage<'a, F, C> {
     /// Appends an entry onto the end of the log. Entry must fit within a page (including log
     /// metadata).
-    fn append(&self, buffer: &'static mut [u8], length: usize) -> ReturnCode {
+    fn append(
+        &self,
+        buffer: &'static mut [u8],
+        length: usize,
+    ) -> Result<(), (ReturnCode, &'static mut [u8])> {
         if self.state.get() != State::Idle {
-            return ReturnCode::EBUSY;
+            // Busy with another operation.
+            Err((ReturnCode::EBUSY, buffer))
         } else if buffer.len() < length {
-            return ReturnCode::EINVAL;
+            // Invalid length provided.
+            Err((ReturnCode::EINVAL, buffer))
         } else if length + ENTRY_HEADER_SIZE + PAGE_HEADER_SIZE > self.page_size {
-            return ReturnCode::ESIZE;
-        }
-
-        // Ensure end of log hasn't been reached.
-        if !self.circular
+            // Entry too big, won't fit within a single page.
+            Err((ReturnCode::ESIZE, buffer))
+        } else if !self.circular
             && self.append_position.get() + length + ENTRY_HEADER_SIZE >= self.volume.len()
         {
-            ReturnCode::FAIL
+            // End of non-circular log has been reached.
+            Err((ReturnCode::FAIL, buffer))
         } else {
-            self.length.set(length);
-
             // Check if new entry will fit into current page.
             let result_size =
                 self.append_position.get() % self.page_size + length + ENTRY_HEADER_SIZE;
             if result_size <= self.page_size {
-                self.pagebuffer
-                    .take()
-                    .map_or(ReturnCode::ERESERVE, move |pagebuffer| {
-                        self.append_entry(buffer, pagebuffer);
-                        ReturnCode::SUCCESS
-                    })
+                match self.pagebuffer.take() {
+                    Some(pagebuffer) => {
+                        self.append_entry(buffer, length, pagebuffer);
+                        Ok(())
+                    }
+                    None => Err((ReturnCode::ERESERVE, buffer)),
+                }
             } else {
                 // Need to sync pagebuffer first, then write to new page.
                 self.state.set(State::Write);
-                self.buffer.replace(buffer);
-                self.pagebuffer
-                    .take()
-                    .map_or(ReturnCode::ERESERVE, move |pagebuffer| {
+                match self.pagebuffer.take() {
+                    Some(pagebuffer) => {
+                        self.buffer.replace(buffer);
+                        self.length.set(length);
                         self.flush_pagebuffer(
                             pagebuffer,
                             self.page_number(self.append_position.get()),
                         );
-                        ReturnCode::SUCCESS
-                    })
+                        Ok(())
+                    }
+                    None => Err((ReturnCode::ERESERVE, buffer)),
+                }
             }
         }
     }
@@ -494,8 +503,6 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
     }
 
     fn write_complete(&self, write_buffer: &'static mut F::Page, error: flash::Error) {
-        // TODO: what if first write wrote beyond the end of the log boundaries?
-        // TODO: increment read offset if invalidated by write.
         match error {
             flash::Error::CommandComplete => {
                 let append_offset = self.append_position.get() % self.volume.len();
@@ -505,7 +512,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
                     append_offset - self.page_size - PAGE_HEADER_SIZE
                 };
                 debug!(
-                    "Write synced: {:?}...{:?} ({})",
+                    "Synced:  {:?}...{:?} ({})",
                     &self.volume[offset..offset + 16],
                     &self.volume[offset + 496..offset + 512],
                     offset,
@@ -515,9 +522,12 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
 
                 match self.state.get() {
                     State::Write => {
-                        self.buffer.take().map(move |buffer| {
-                            self.append_entry(buffer, write_buffer);
-                        });
+                        self.buffer.take().map_or_else(
+                            || panic!("No buffer"),
+                            move |buffer| {
+                                self.append_entry(buffer, self.length.get(), write_buffer);
+                            },
+                        );
                     }
                     State::Sync => {
                         self.pagebuffer.replace(write_buffer);
