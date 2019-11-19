@@ -18,7 +18,7 @@ pub trait LogRead {
     fn read(&self, buffer: &'static mut [u8], length: StorageLen) -> ReturnCode;
 
     /// Get cookie representing current read position.
-    fn current_offset(&self) -> StorageCookie;
+    fn current_read_offset(&self) -> StorageCookie;
 
     /// Seek to a new read position.
     fn seek(&self, offset: StorageCookie) -> ReturnCode;
@@ -40,7 +40,7 @@ pub trait LogWrite {
     fn append(&self, buffer: &'static mut [u8], length: StorageLen) -> ReturnCode;
 
     /// Get cookie representing current append position.
-    fn current_offset(&self) -> StorageCookie;
+    fn current_append_offset(&self) -> StorageCookie;
 
     /// Erase the entire log.
     fn erase(&self) -> ReturnCode;
