@@ -58,7 +58,7 @@ pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
 // Buffer for reading from and writing to in the storage tests.
 static mut BUFFER: [u8; 8] = [0; 8];
 // Length of buffer to actually use.
-const BUFFER_LEN: usize = 7;
+const BUFFER_LEN: usize = 8;
 // Amount to shift value before adding to magic in order to fit in buffer.
 const VALUE_SHIFT: usize = 8 * (8 - BUFFER_LEN);
 // Time to wait in between storage operations.
@@ -161,27 +161,35 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
 
             if let Err((error, original_buffer)) = self.storage.read(buffer, BUFFER_LEN) {
                 self.buffer.replace(original_buffer);
-                if error == ReturnCode::FAIL {
-                    // No more entries, start writing again.
-                    debug!(
-                        "READ DONE: READ OFFSET: {} / WRITE OFFSET: {}",
-                        self.storage.current_read_offset(),
-                        self.storage.current_append_offset()
-                    );
-                    self.run();
-                } else if error != ReturnCode::SUCCESS {
-                    debug!("READ FAILED: {:?}", error);
+                match error {
+                    ReturnCode::SUCCESS => (),
+                    ReturnCode::FAIL => {
+                        // No more entries, start writing again.
+                        debug!(
+                            "READ DONE: READ OFFSET: {:?} / WRITE OFFSET: {:?}",
+                            self.storage.current_read_offset(),
+                            self.storage.current_append_offset()
+                        );
+                        self.run();
+                    }
+                    ReturnCode::EBUSY => self.wait(WAIT_MS),
+                    _ => debug!("READ FAILED: {:?}", error),
                 }
             }
         });
     }
 
-    fn write (&self) {
+    fn write(&self) {
         self.buffer.take().map(move |buffer| {
             buffer.clone_from_slice(&(MAGIC + (self.write_val.get() << VALUE_SHIFT)).to_be_bytes());
             if let Err((error, original_buffer)) = self.storage.append(buffer, BUFFER_LEN) {
                 self.buffer.replace(original_buffer);
-                debug!("WRITE FAILED: {:?}", error);
+
+                match error {
+                    ReturnCode::SUCCESS => (),
+                    ReturnCode::EBUSY => self.wait(WAIT_MS),
+                    _ => debug!("WRITE FAILED: {:?}", error),
+                }
             }
         });
     }
@@ -200,7 +208,7 @@ impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
                 // Verify correct number of bytes were read.
                 if length != BUFFER_LEN {
                     panic!(
-                        "{} bytes read, expected {} on read number {} (offset {}). Value read was {:?}",
+                        "{} bytes read, expected {} on read number {} (offset {:?}). Value read was {:?}",
                         length,
                         BUFFER_LEN,
                         self.read_val.get(),
@@ -214,7 +222,7 @@ impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
                 for i in 0..BUFFER_LEN {
                     if buffer[i] != expected[i] {
                         panic!(
-                            "Expected {:?}, read {:?} on read number {} (offset {})",
+                            "Expected {:?}, read {:?} on read number {} (offset {:?})",
                             &expected[0..BUFFER_LEN],
                             &buffer[0..BUFFER_LEN],
                             self.read_val.get(),
@@ -246,7 +254,7 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
 
         if self.write_val.get() % 120 == 0 {
             debug!(
-                "WRITE DONE: READ OFFSET: {} / WRITE OFFSET: {}",
+                "WRITE DONE: READ OFFSET: {:?} / WRITE OFFSET: {:?}",
                 self.storage.current_read_offset(),
                 self.storage.current_append_offset()
             );
