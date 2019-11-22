@@ -2,7 +2,7 @@ use kernel::ReturnCode;
 
 pub type StorageLen = usize;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum StorageCookie {
     SeekBeginning,
     Cookie(usize),

@@ -2,11 +2,11 @@
 /// work right now.
 use capsules::log_storage;
 use capsules::storage_interface::{
-    self, LogRead, LogReadClient, LogWrite, LogWriteClient, StorageLen,
+    self, LogRead, LogReadClient, LogWrite, LogWriteClient, StorageCookie, StorageLen,
 };
 use capsules::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use core::cell::Cell;
-use kernel::common::cells::TakeCell;
+use kernel::common::cells::{NumericCellExt, TakeCell};
 use kernel::debug;
 use kernel::hil::flash;
 use kernel::hil::time::{Alarm, AlarmClient, Frequency};
@@ -47,13 +47,31 @@ pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
     // Create and run test for log storage.
     let log_storage_test = static_init!(
         LogStorageTest<VirtualMuxAlarm<'static, Ast>>,
-        LogStorageTest::new(log_storage, &mut BUFFER, VirtualMuxAlarm::new(mux_alarm))
+        LogStorageTest::new(log_storage, &mut BUFFER, VirtualMuxAlarm::new(mux_alarm), &TEST_OPS)
     );
     storage_interface::HasClient::set_client(log_storage, log_storage_test);
     log_storage_test.alarm.set_client(log_storage_test);
 
     log_storage_test.run();
 }
+
+static TEST_OPS: [TestOp; 15] = [
+    TestOp::Erase,
+    TestOp::Write,
+    TestOp::Read,
+    TestOp::Write,
+    TestOp::Read,
+    TestOp::Seek(StorageCookie::SeekBeginning, 0),
+    TestOp::Read,
+    TestOp::Seek(StorageCookie::SeekBeginning, 0),
+    TestOp::Write,
+    TestOp::SetReadVal(84),
+    TestOp::Read,
+    TestOp::Write,
+    TestOp::Sync,
+    TestOp::SetReadVal(252),
+    TestOp::Read,
+];
 
 // Buffer for reading from and writing to in the storage tests.
 static mut BUFFER: [u8; 8] = [0; 8];
@@ -81,6 +99,17 @@ enum AlarmTask {
     Write,
 }
 
+// A single operation within the test.
+#[derive(Clone, Copy, PartialEq)]
+enum TestOp {
+    Erase,
+    Read,
+    Write,
+    Sync,
+    Seek(StorageCookie, u64),
+    SetReadVal(u64),
+}
+
 type LogStorage = log_storage::LogStorage<
     'static,
     flashcalw::FLASHCALW,
@@ -92,66 +121,85 @@ struct LogStorageTest<A: Alarm<'static>> {
     alarm: A,
     state: Cell<TestState>,
     alarm_task: Cell<AlarmTask>,
+    ops: &'static [TestOp],
+    op_index: Cell<usize>,
     read_val: Cell<u64>,
     write_val: Cell<u64>,
 }
 
 impl<A: Alarm<'static>> LogStorageTest<A> {
-    fn new(storage: &'static LogStorage, buffer: &'static mut [u8], alarm: A) -> LogStorageTest<A> {
+    fn new(
+        storage: &'static LogStorage,
+        buffer: &'static mut [u8],
+        alarm: A,
+        ops: &'static [TestOp],
+    ) -> LogStorageTest<A> {
         LogStorageTest {
             storage,
             buffer: TakeCell::new(buffer),
             alarm,
             state: Cell::new(TestState::Erase),
             alarm_task: Cell::new(AlarmTask::Write),
+            ops,
+            op_index: Cell::new(0),
             read_val: Cell::new(0),
             write_val: Cell::new(0),
         }
     }
 
     fn run(&self) {
-        match self.state.get() {
-            TestState::Erase => {
-                // Erase log.
-                if self.storage.erase() != ReturnCode::SUCCESS {
-                    panic!("Could not erase log storage!");
-                }
+        let op_index = self.op_index.get();
+        if op_index == self.ops.len() {
+            debug!("Log Storage test succeeded!");
+            return;
+        }
 
-                // Make sure that a read on an empty log fails normally.
-                self.buffer.take().map(move |buffer| {
-                    if let Err((error, original_buffer)) = self.storage.read(buffer, BUFFER_LEN) {
-                        self.buffer.replace(original_buffer);
-                        if error != ReturnCode::FAIL {
-                            panic!("Read on empty log: {:?}", error);
-                        }
-                    } else {
-                        panic!("Read on empty log succeeded! (it shouldn't)");
-                    }
-                });
-
-                debug!("Log Storage erased");
-
-                // Start writing data.
-                self.state.set(TestState::WriteReadNoSync(10));
+        match self.ops[op_index] {
+            TestOp::Erase => self.erase(),
+            TestOp::Read => self.read(),
+            TestOp::Write => self.write(),
+            TestOp::Sync => self.sync(),
+            TestOp::Seek(cookie, read_val) => self.seek(cookie, read_val),
+            TestOp::SetReadVal(read_val) => {
+                self.read_val.set(read_val);
+                self.op_index.increment();
                 self.run();
             }
-            TestState::WriteReadNoSync(iterations) => {
-                if iterations == 0 {
-                    self.state.set(TestState::Done);
-                    self.run();
-                } else {
-                    self.alarm_task.set(AlarmTask::Write);
-                    self.state.set(TestState::WriteReadNoSync(iterations - 1));
-                    self.write();
-                }
-            }
-            TestState::Done => {
-                debug!("Log Storage test succeeded!");
-                // TODO: actually allow this when done:
-                //debug!("Press the reset button to verify storage persistence");
-                //debug!("Press the user button to erase log storage");
-            }
         }
+    }
+
+    fn erase(&self) {
+        // Erase log.
+        match self.storage.erase() {
+            ReturnCode::SUCCESS => (),
+            ReturnCode::EBUSY => {
+                self.wait();
+                return;
+            }
+            _ => panic!("Could not erase log storage!"),
+        }
+
+        // Make sure that a read on an empty log fails normally.
+        self.buffer.take().map(move |buffer| {
+            if let Err((error, original_buffer)) = self.storage.read(buffer, BUFFER_LEN) {
+                self.buffer.replace(original_buffer);
+                match error {
+                    ReturnCode::FAIL => (),
+                    ReturnCode::EBUSY => {
+                        self.wait();
+                        return;
+                    }
+                    _ => panic!("Read on empty log did not fail as expected: {:?}", error),
+                }
+            } else {
+                panic!("Read on empty log succeeded! (it shouldn't)");
+            }
+        });
+
+        // Move to next operation.
+        debug!("Log Storage erased");
+        self.op_index.increment();
+        self.run();
     }
 
     fn read(&self) {
@@ -170,9 +218,10 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
                             self.storage.current_read_offset(),
                             self.storage.current_append_offset()
                         );
+                        self.op_index.increment();
                         self.run();
                     }
-                    ReturnCode::EBUSY => self.wait(WAIT_MS),
+                    ReturnCode::EBUSY => self.wait(),
                     _ => debug!("READ FAILED: {:?}", error),
                 }
             }
@@ -187,15 +236,30 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
 
                 match error {
                     ReturnCode::SUCCESS => (),
-                    ReturnCode::EBUSY => self.wait(WAIT_MS),
+                    ReturnCode::EBUSY => self.wait(),
                     _ => debug!("WRITE FAILED: {:?}", error),
                 }
             }
         });
     }
 
-    fn wait(&self, ms: u32) {
-        let interval = ms * <A::Frequency>::frequency() / 1000;
+    fn sync(&self) {
+        match self.storage.sync() {
+            ReturnCode::SUCCESS => (),
+            error => panic!("Sync failed: {:?}", error),
+        }
+    }
+
+    fn seek(&self, cookie: StorageCookie, read_val: u64) {
+        self.read_val.set(read_val);
+        match self.storage.seek(cookie) {
+            ReturnCode::SUCCESS => debug!("Seeking to {:?}...", cookie),
+            error => panic!("Seek failed: {:?}", error),
+        }
+    }
+
+    fn wait(&self) {
+        let interval = WAIT_MS * <A::Frequency>::frequency() / 1000;
         let tics = self.alarm.now().wrapping_add(interval);
         self.alarm.set_alarm(tics);
     }
@@ -233,13 +297,25 @@ impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
 
                 self.buffer.replace(buffer);
                 self.read_val.set(self.read_val.get() + 1);
-                self.wait(WAIT_MS);
+                self.wait();
             }
-            _ => self.wait(WAIT_MS),
+            _ => {
+                debug!("Read failed, trying again");
+                self.wait();
+            }
         }
     }
 
-    fn seek_done(&self, _error: ReturnCode) {}
+    fn seek_done(&self, error: ReturnCode) {
+        if error == ReturnCode::SUCCESS {
+            debug!("Seeked");
+        } else {
+            panic!("Seek failed: {:?}", error);
+        }
+
+        self.op_index.increment();
+        self.run();
+    }
 }
 
 impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
@@ -252,29 +328,40 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
     ) {
         self.buffer.replace(buffer);
 
+        // Stop writing after 120 entries have been written.
         if self.write_val.get() % 120 == 0 {
             debug!(
                 "WRITE DONE: READ OFFSET: {:?} / WRITE OFFSET: {:?}",
                 self.storage.current_read_offset(),
                 self.storage.current_append_offset()
             );
-            self.alarm_task.set(AlarmTask::Read);
+            self.op_index.increment();
         }
 
         self.write_val.set(self.write_val.get() + 1);
-        self.wait(WAIT_MS);
+        self.wait();
     }
 
     fn erase_done(&self, _error: ReturnCode) {}
 
-    fn sync_done(&self, _error: ReturnCode) {}
+    fn sync_done(&self, error: ReturnCode) {
+        if error == ReturnCode::SUCCESS {
+            debug!(
+                "SYNC DONE: READ OFFSET: {:?} / WRITE OFFSET: {:?}",
+                self.storage.current_read_offset(),
+                self.storage.current_append_offset()
+            );
+        } else {
+            panic!("Sync failed: {:?}", error);
+        }
+
+        self.op_index.increment();
+        self.run();
+    }
 }
 
 impl<A: Alarm<'static>> AlarmClient for LogStorageTest<A> {
     fn fired(&self) {
-        match self.alarm_task.get() {
-            AlarmTask::Read => self.read(),
-            AlarmTask::Write => self.write(),
-        }
+        self.run();
     }
 }
