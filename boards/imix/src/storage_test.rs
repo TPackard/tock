@@ -20,7 +20,7 @@ use sam4l::flashcalw;
 storage_volume!(TEST_LOG, 2);
 
 pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
-    // TODO: figure out why this is not properly aligned.
+    // TODO: merge with master and remove.
     let storage_offset = 512 - TEST_LOG.as_ptr() as usize % 512;
     debug!(
         "STORAGE VOLUME PHYSICALLY STARTS AT {:?}, offsetting by {}",
@@ -55,21 +55,26 @@ pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
     log_storage_test.run();
 }
 
-static TEST_OPS: [TestOp; 15] = [
-    TestOp::Erase,
+static TEST_OPS: [TestOp; 13] = [
+    // Read back any existing entries.
+    TestOp::Read,
+    // Write multiple pages, but don't fill log.
     TestOp::Write,
     TestOp::Read,
     TestOp::Write,
     TestOp::Read,
-    TestOp::Seek(StorageCookie::SeekBeginning, 0),
+    // Seek to beginning and re-verify entire log.
+    TestOp::Seek(StorageCookie::SeekBeginning),
     TestOp::Read,
-    TestOp::Seek(StorageCookie::SeekBeginning, 0),
+    // Write multiple pages, over-filling log and overwriting oldest entries.
+    TestOp::Seek(StorageCookie::SeekBeginning),
     TestOp::Write,
-    TestOp::SetReadVal(84),
+    // Read offset should be incremented since it was invalidated by previous write.
     TestOp::Read,
+    // Write multiple pages and sync. Read offset should be invalidated due to sync clobbering
+    // previous read offset.
     TestOp::Write,
     TestOp::Sync,
-    TestOp::SetReadVal(252),
     TestOp::Read,
 ];
 
@@ -84,21 +89,6 @@ const WAIT_MS: u32 = 2;
 // Magic number to write to log storage (+ offset).
 const MAGIC: u64 = 0x0102030405060708;
 
-// Current state test is operating in.
-#[derive(Clone, Copy, PartialEq)]
-enum TestState {
-    Erase,
-    WriteReadNoSync(u8),
-    Done,
-}
-
-// Task to perform after test alarm is fired.
-#[derive(Clone, Copy, PartialEq)]
-enum AlarmTask {
-    Read,
-    Write,
-}
-
 // A single operation within the test.
 #[derive(Clone, Copy, PartialEq)]
 enum TestOp {
@@ -106,7 +96,7 @@ enum TestOp {
     Read,
     Write,
     Sync,
-    Seek(StorageCookie, u64),
+    Seek(StorageCookie),
     SetReadVal(u64),
 }
 
@@ -119,10 +109,9 @@ struct LogStorageTest<A: Alarm<'static>> {
     storage: &'static LogStorage,
     buffer: TakeCell<'static, [u8]>,
     alarm: A,
-    state: Cell<TestState>,
-    alarm_task: Cell<AlarmTask>,
     ops: &'static [TestOp],
     op_index: Cell<usize>,
+    op_start: Cell<bool>,
     read_val: Cell<u64>,
     write_val: Cell<u64>,
 }
@@ -134,16 +123,19 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
         alarm: A,
         ops: &'static [TestOp],
     ) -> LogStorageTest<A> {
+        // Recover test state.
+        let read_val = cookie_to_test_value(storage.current_read_offset());
+        let write_val = cookie_to_test_value(storage.current_append_offset());
+
         LogStorageTest {
             storage,
             buffer: TakeCell::new(buffer),
             alarm,
-            state: Cell::new(TestState::Erase),
-            alarm_task: Cell::new(AlarmTask::Write),
             ops,
             op_index: Cell::new(0),
-            read_val: Cell::new(0),
-            write_val: Cell::new(0),
+            op_start: Cell::new(true),
+            read_val: Cell::new(read_val),
+            write_val: Cell::new(write_val),
         }
     }
 
@@ -159,13 +151,18 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
             TestOp::Read => self.read(),
             TestOp::Write => self.write(),
             TestOp::Sync => self.sync(),
-            TestOp::Seek(cookie, read_val) => self.seek(cookie, read_val),
+            TestOp::Seek(cookie) => self.seek(cookie),
             TestOp::SetReadVal(read_val) => {
                 self.read_val.set(read_val);
-                self.op_index.increment();
+                self.next_op();
                 self.run();
             }
         }
+    }
+
+    fn next_op(&self) {
+        self.op_index.increment();
+        self.op_start.set(true);
     }
 
     fn erase(&self) {
@@ -198,11 +195,20 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
 
         // Move to next operation.
         debug!("Log Storage erased");
-        self.op_index.increment();
+        self.next_op();
         self.run();
     }
 
     fn read(&self) {
+        // Update read value if clobbered by previous operation.
+        if self.op_start.get() {
+            let next_read_val = cookie_to_test_value(self.storage.current_read_offset());
+            if self.read_val.get() < next_read_val {
+                debug!("Increasing read value from {} to {} due to clobbering!", self.read_val.get(), next_read_val);
+                self.read_val.set(next_read_val);
+            }
+        }
+
         self.buffer.take().map(move |buffer| {
             // Clear buffer first to make debugging more sane.
             buffer.clone_from_slice(&0u64.to_be_bytes());
@@ -210,7 +216,6 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
             if let Err((error, original_buffer)) = self.storage.read(buffer, BUFFER_LEN) {
                 self.buffer.replace(original_buffer);
                 match error {
-                    ReturnCode::SUCCESS => (),
                     ReturnCode::FAIL => {
                         // No more entries, start writing again.
                         debug!(
@@ -218,11 +223,11 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
                             self.storage.current_read_offset(),
                             self.storage.current_append_offset()
                         );
-                        self.op_index.increment();
+                        self.next_op();
                         self.run();
                     }
                     ReturnCode::EBUSY => self.wait(),
-                    _ => debug!("READ FAILED: {:?}", error),
+                    _ => panic!("READ FAILED: {:?}", error),
                 }
             }
         });
@@ -235,7 +240,6 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
                 self.buffer.replace(original_buffer);
 
                 match error {
-                    ReturnCode::SUCCESS => (),
                     ReturnCode::EBUSY => self.wait(),
                     _ => debug!("WRITE FAILED: {:?}", error),
                 }
@@ -250,8 +254,7 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
         }
     }
 
-    fn seek(&self, cookie: StorageCookie, read_val: u64) {
-        self.read_val.set(read_val);
+    fn seek(&self, cookie: StorageCookie) {
         match self.storage.seek(cookie) {
             ReturnCode::SUCCESS => debug!("Seeking to {:?}...", cookie),
             error => panic!("Seek failed: {:?}", error),
@@ -297,6 +300,7 @@ impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
 
                 self.buffer.replace(buffer);
                 self.read_val.set(self.read_val.get() + 1);
+                self.op_start.set(false);
                 self.wait();
             }
             _ => {
@@ -309,11 +313,12 @@ impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
     fn seek_done(&self, error: ReturnCode) {
         if error == ReturnCode::SUCCESS {
             debug!("Seeked");
+            self.read_val.set(cookie_to_test_value(self.storage.current_read_offset()));
         } else {
             panic!("Seek failed: {:?}", error);
         }
 
-        self.op_index.increment();
+        self.next_op();
         self.run();
     }
 }
@@ -327,6 +332,7 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
         _error: ReturnCode,
     ) {
         self.buffer.replace(buffer);
+        self.op_start.set(false);
 
         // Stop writing after 120 entries have been written.
         if self.write_val.get() % 120 == 0 {
@@ -335,7 +341,7 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
                 self.storage.current_read_offset(),
                 self.storage.current_append_offset()
             );
-            self.op_index.increment();
+            self.next_op();
         }
 
         self.write_val.set(self.write_val.get() + 1);
@@ -355,7 +361,7 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
             panic!("Sync failed: {:?}", error);
         }
 
-        self.op_index.increment();
+        self.next_op();
         self.run();
     }
 }
@@ -363,5 +369,23 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
 impl<A: Alarm<'static>> AlarmClient for LogStorageTest<A> {
     fn fired(&self) {
         self.run();
+    }
+}
+
+fn cookie_to_test_value(cookie: StorageCookie) -> u64 {
+    // Page and entry header sizes for log storage.
+    const PAGE_HEADER_SIZE: usize = core::mem::size_of::<usize>();
+    const ENTRY_HEADER_SIZE: usize = core::mem::size_of::<usize>();
+    const PAGE_SIZE: usize = 512;
+
+    match cookie {
+        StorageCookie::Cookie(cookie) => {
+            let pages_written = cookie / PAGE_SIZE;
+            let entry_size = ENTRY_HEADER_SIZE + BUFFER_LEN;
+            let entries_per_page = (PAGE_SIZE - PAGE_HEADER_SIZE) / entry_size;
+            let hanging_entries = (cookie % PAGE_SIZE - PAGE_HEADER_SIZE) / entry_size;
+            (pages_written * entries_per_page + hanging_entries) as u64
+        }
+        StorageCookie::SeekBeginning => 0
     }
 }
