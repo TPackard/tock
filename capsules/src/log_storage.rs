@@ -24,7 +24,7 @@ const INVALID_ENTRY_LENGTH: usize = 0xFFFFFFFF;
 enum State {
     Idle,
     Write,
-    Sync(bool),
+    Sync(bool), // Boolean flag for whether or not to make client callback.
 }
 
 pub struct LogStorage<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> {
@@ -65,11 +65,6 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
         pagebuffer: &'static mut F::Page,
         circular: bool,
     ) -> LogStorage<'a, F, C> {
-        // TODO: remove debug statements.
-        debug!("page header size:  {}", PAGE_HEADER_SIZE);
-        debug!("entry header size: {}", ENTRY_HEADER_SIZE);
-
-        debug!("LOG STORAGE VOLUME STARTS AT {:?}", volume.as_ptr());
         let page_size = pagebuffer.as_mut().len();
         let capacity = volume.len() - PAGE_HEADER_SIZE * (volume.len() / page_size);
 
@@ -132,39 +127,43 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
 
     /// Reconstructs a log from flash.
     fn reconstruct(&self) {
+        // Read page headers, get oldest and newest cookies.
         let mut oldest_cookie = core::usize::MAX;
         let mut newest_cookie: usize = 0;
-
-        // Read page headers, get oldest and newest cookies.
-        for i in (0..self.volume.len()).step_by(self.page_size) {
-            let page_cookie = {
+        for header_cookie in (0..self.volume.len()).step_by(self.page_size) {
+            let cookie = {
                 const COOKIE_SIZE: usize = size_of::<usize>();
-                let cookie_bytes = &self.volume[i..i+COOKIE_SIZE];
+                let cookie_bytes = &self.volume[header_cookie..header_cookie + COOKIE_SIZE];
                 let cookie_bytes = <[u8; COOKIE_SIZE]>::try_from(cookie_bytes).unwrap();
                 usize::from_ne_bytes(cookie_bytes)
             };
 
-            // Valid page header cookies must be a multiple of the page size.
-            if page_cookie % self.page_size == 0 {
-                if page_cookie < oldest_cookie {
-                    oldest_cookie = page_cookie;
-                } else if page_cookie > newest_cookie {
-                    newest_cookie = page_cookie;
+            // Validate cookie read from header.
+            if cookie % self.volume.len() == header_cookie {
+                if cookie < oldest_cookie {
+                    oldest_cookie = cookie;
+                } else if cookie > newest_cookie {
+                    newest_cookie = cookie;
                 }
             }
         }
 
         // Recover start and end of log from page header cookies.
-        let last_page_offset = newest_cookie % self.volume.len();
+        let last_page_pos = newest_cookie % self.volume.len();
         oldest_cookie += PAGE_HEADER_SIZE;
         newest_cookie += PAGE_HEADER_SIZE;
+
         // Walk entries in newest page to find end of valid page data.
-        while newest_cookie % self.page_size != 0 && self.volume[newest_cookie % self.volume.len()] != PAD_BYTE && self.volume[newest_cookie % self.volume.len()] != 0 {
+        // TODO: can read invalidly high cookies.
+        while newest_cookie % self.page_size != 0
+            && self.volume[newest_cookie % self.volume.len()] != 0
+            && self.volume[newest_cookie % self.volume.len()] != PAD_BYTE
+        {
             // Get next entry length.
             let entry_length = {
                 const LENGTH_SIZE: usize = size_of::<usize>();
                 let volume_offset = newest_cookie % self.volume.len();
-                let length_bytes = &self.volume[volume_offset..volume_offset+LENGTH_SIZE];
+                let length_bytes = &self.volume[volume_offset..volume_offset + LENGTH_SIZE];
                 let length_bytes = <[u8; LENGTH_SIZE]>::try_from(length_bytes).unwrap();
                 usize::from_ne_bytes(length_bytes)
             };
@@ -172,24 +171,29 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
             newest_cookie += ENTRY_HEADER_SIZE + entry_length;
         }
 
-        // Copy last page into pagebuffer.
-        // TODO: what to do if last page is saturated?
-        self.pagebuffer
-            .take()
-            .map(move |pagebuffer| {
-                for i in 0..self.page_size {
-                    pagebuffer.as_mut()[i] = self.volume[last_page_offset + i];
-                }
-
-                self.pagebuffer.replace(pagebuffer);
-            });
-
         // Set cookies.
         self.oldest_cookie.set(oldest_cookie);
         self.read_cookie.set(oldest_cookie);
         self.append_cookie.set(newest_cookie);
 
-        debug!("Recovered log (read: {}, append: {})", oldest_cookie, newest_cookie);
+        // Populate page buffer.
+        self.pagebuffer.take().map(move |pagebuffer| {
+            if newest_cookie % self.page_size == 0 {
+                // Last page full, reset pagebuffer for next page.
+                self.reset_pagebuffer(pagebuffer);
+            } else {
+                // Copy last page into pagebuffer.
+                for i in 0..self.page_size {
+                    pagebuffer.as_mut()[i] = self.volume[last_page_pos + i];
+                }
+            }
+            self.pagebuffer.replace(pagebuffer);
+        });
+
+        debug!(
+            "Recovered log (read: {}, append: {})",
+            oldest_cookie, newest_cookie
+        );
     }
 
     /// Advances read_cookie to the start of the next log entry. Returns the length of the entry
@@ -224,7 +228,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
         };
 
         // Return length of next entry.
-        if length == INVALID_ENTRY_LENGTH {
+        if length == INVALID_ENTRY_LENGTH || length == 0 {
             Err(ReturnCode::FAIL)
         } else {
             Ok(length)
@@ -269,12 +273,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
 
     /// Writes an entry header at the given cookie within a page. Returns number of bytes
     /// written.
-    fn write_entry_header(
-        &self,
-        length: usize,
-        cookie: usize,
-        pagebuffer: &mut F::Page,
-    ) -> usize {
+    fn write_entry_header(&self, length: usize, cookie: usize, pagebuffer: &mut F::Page) -> usize {
         let mut offset = 0;
         for byte in &length.to_ne_bytes() {
             pagebuffer.as_mut()[cookie + offset] = *byte;
@@ -346,10 +345,11 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
                 read_cookie + self.page_size + PAGE_HEADER_SIZE - read_cookie % self.page_size,
             );
         }
-        
+
         let oldest_cookie = self.oldest_cookie.get();
         if (oldest_cookie + self.volume.len()) / self.page_size
-            == (append_cookie - 1) / self.page_size {
+            == (append_cookie - 1) / self.page_size
+        {
             self.oldest_cookie.set(oldest_cookie + self.page_size);
         }
 
@@ -379,6 +379,15 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
         }
 
         self.append_cookie.set(append_cookie + PAGE_HEADER_SIZE);
+    }
+
+    /// Erases a single page from storage.
+    fn erase_page(&self) -> ReturnCode {
+        // Uses oldest cookie to keep track of which page to erase. Thus, the oldest pages will be
+        // erased first and the log will remain in a valid state even if it fails to be erased
+        // completely.
+        self.driver
+            .erase_page(self.page_number(self.oldest_cookie.get()))
     }
 }
 
@@ -510,23 +519,13 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
         StorageCookie::Cookie(self.append_cookie.get())
     }
 
-    /// Erase the entire log.
-    fn erase(&self) -> ReturnCode {
-        // TODO: actually erase every page.
-        self.read_cookie.set(PAGE_HEADER_SIZE);
-        self.append_cookie.set(PAGE_HEADER_SIZE);
-        self.oldest_cookie.set(PAGE_HEADER_SIZE);
-        self.client
-            .map(move |client| client.erase_done(ReturnCode::SUCCESS));
-        ReturnCode::SUCCESS
-    }
-
     /// Sync log to storage.
     fn sync(&self) -> ReturnCode {
         let append_cookie = self.append_cookie.get();
         if append_cookie % self.page_size == PAGE_HEADER_SIZE {
             // Pagebuffer empty, don't need to sync.
-            self.client.map(move |client| client.sync_done(ReturnCode::SUCCESS));
+            self.client
+                .map(move |client| client.sync_done(ReturnCode::SUCCESS));
             ReturnCode::SUCCESS
         } else {
             self.pagebuffer
@@ -536,6 +535,11 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
                     self.flush_pagebuffer(pagebuffer)
                 })
         }
+    }
+
+    /// Erase the entire log.
+    fn erase(&self) -> ReturnCode {
+        self.erase_page()
     }
 }
 
@@ -581,7 +585,8 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
                         self.state.set(State::Idle);
 
                         if callback_client {
-                            self.client.map(move |client| client.sync_done(ReturnCode::SUCCESS));
+                            self.client
+                                .map(move |client| client.sync_done(ReturnCode::SUCCESS));
                         }
                     }
                     _ => {}
@@ -594,8 +599,36 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
         }
     }
 
-    fn erase_complete(&self, _error: flash::Error) {
-        // TODO
-        unreachable!();
+    fn erase_complete(&self, error: flash::Error) {
+        match error {
+            flash::Error::CommandComplete => {
+                let oldest_cookie = self.oldest_cookie.get();
+                if self.page_number(oldest_cookie) == self.page_number(self.append_cookie.get()) {
+                    // Erased all pages. Reset cookies and callback client.
+                    self.read_cookie.set(PAGE_HEADER_SIZE);
+                    self.append_cookie.set(PAGE_HEADER_SIZE);
+                    self.oldest_cookie.set(PAGE_HEADER_SIZE);
+
+                    self.client
+                        .map(move |client| client.erase_done(ReturnCode::SUCCESS));
+                } else {
+                    // Not done, erase next page.
+                    self.oldest_cookie.set(oldest_cookie + self.page_size);
+                    let status = self.erase_page();
+
+                    // Abort and alert client if flash driver is busy.
+                    if status == ReturnCode::EBUSY {
+                        self.read_cookie
+                            .set(core::cmp::max(self.read_cookie.get(), oldest_cookie));
+                        self.client
+                            .map(move |client| client.erase_done(ReturnCode::EBUSY));
+                    }
+                }
+            }
+            flash::Error::FlashError => {
+                // TODO: handle errors.
+                panic!("FLASH ERROR");
+            }
+        }
     }
 }

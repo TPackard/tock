@@ -9,6 +9,7 @@ use core::cell::Cell;
 use kernel::common::cells::{NumericCellExt, TakeCell};
 use kernel::debug;
 use kernel::hil::flash;
+use kernel::hil::gpio::{self, Interrupt};
 use kernel::hil::time::{Alarm, AlarmClient, Frequency};
 use kernel::static_init;
 use kernel::storage_volume;
@@ -20,14 +21,6 @@ use sam4l::flashcalw;
 storage_volume!(TEST_LOG, 2);
 
 pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
-    // TODO: merge with master and remove.
-    let storage_offset = 512 - TEST_LOG.as_ptr() as usize % 512;
-    debug!(
-        "STORAGE VOLUME PHYSICALLY STARTS AT {:?}, offsetting by {}",
-        TEST_LOG.as_ptr(),
-        storage_offset
-    );
-
     // Set up flash controller.
     flashcalw::FLASH_CONTROLLER.configure();
     pub static mut PAGEBUFFER: flashcalw::Sam4lPage = flashcalw::Sam4lPage::new();
@@ -36,7 +29,7 @@ pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
     let log_storage = static_init!(
         LogStorage,
         log_storage::LogStorage::new(
-            &TEST_LOG[storage_offset..storage_offset + 1536],
+            &TEST_LOG,
             &mut flashcalw::FLASH_CONTROLLER,
             &mut PAGEBUFFER,
             true
@@ -47,10 +40,20 @@ pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
     // Create and run test for log storage.
     let log_storage_test = static_init!(
         LogStorageTest<VirtualMuxAlarm<'static, Ast>>,
-        LogStorageTest::new(log_storage, &mut BUFFER, VirtualMuxAlarm::new(mux_alarm), &TEST_OPS)
+        LogStorageTest::new(
+            log_storage,
+            &mut BUFFER,
+            VirtualMuxAlarm::new(mux_alarm),
+            &TEST_OPS
+        )
     );
     storage_interface::HasClient::set_client(log_storage, log_storage_test);
     log_storage_test.alarm.set_client(log_storage_test);
+
+    // Create user button.
+    let button_pin = &sam4l::gpio::PC[24];
+    button_pin.enable_interrupts(gpio::InterruptEdge::RisingEdge);
+    button_pin.set_client(log_storage_test);
 
     log_storage_test.run();
 }
@@ -92,7 +95,6 @@ const MAGIC: u64 = 0x0102030405060708;
 // A single operation within the test.
 #[derive(Clone, Copy, PartialEq)]
 enum TestOp {
-    Erase,
     Read,
     Write,
     Sync,
@@ -112,6 +114,7 @@ struct LogStorageTest<A: Alarm<'static>> {
     ops: &'static [TestOp],
     op_index: Cell<usize>,
     op_start: Cell<bool>,
+    erase: Cell<bool>,
     read_val: Cell<u64>,
     write_val: Cell<u64>,
 }
@@ -134,28 +137,32 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
             ops,
             op_index: Cell::new(0),
             op_start: Cell::new(true),
+            erase: Cell::new(false),
             read_val: Cell::new(read_val),
             write_val: Cell::new(write_val),
         }
     }
 
     fn run(&self) {
-        let op_index = self.op_index.get();
-        if op_index == self.ops.len() {
-            debug!("Log Storage test succeeded!");
-            return;
-        }
+        if self.erase.get() {
+            self.erase();
+        } else {
+            let op_index = self.op_index.get();
+            if op_index == self.ops.len() {
+                debug!("Log Storage test succeeded!");
+                return;
+            }
 
-        match self.ops[op_index] {
-            TestOp::Erase => self.erase(),
-            TestOp::Read => self.read(),
-            TestOp::Write => self.write(),
-            TestOp::Sync => self.sync(),
-            TestOp::Seek(cookie) => self.seek(cookie),
-            TestOp::SetReadVal(read_val) => {
-                self.read_val.set(read_val);
-                self.next_op();
-                self.run();
+            match self.ops[op_index] {
+                TestOp::Read => self.read(),
+                TestOp::Write => self.write(),
+                TestOp::Sync => self.sync(),
+                TestOp::Seek(cookie) => self.seek(cookie),
+                TestOp::SetReadVal(read_val) => {
+                    self.read_val.set(read_val);
+                    self.next_op();
+                    self.run();
+                }
             }
         }
     }
@@ -166,37 +173,13 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
     }
 
     fn erase(&self) {
-        // Erase log.
         match self.storage.erase() {
             ReturnCode::SUCCESS => (),
             ReturnCode::EBUSY => {
                 self.wait();
-                return;
             }
             _ => panic!("Could not erase log storage!"),
         }
-
-        // Make sure that a read on an empty log fails normally.
-        self.buffer.take().map(move |buffer| {
-            if let Err((error, original_buffer)) = self.storage.read(buffer, BUFFER_LEN) {
-                self.buffer.replace(original_buffer);
-                match error {
-                    ReturnCode::FAIL => (),
-                    ReturnCode::EBUSY => {
-                        self.wait();
-                        return;
-                    }
-                    _ => panic!("Read on empty log did not fail as expected: {:?}", error),
-                }
-            } else {
-                panic!("Read on empty log succeeded! (it shouldn't)");
-            }
-        });
-
-        // Move to next operation.
-        debug!("Log Storage erased");
-        self.next_op();
-        self.run();
     }
 
     fn read(&self) {
@@ -204,7 +187,11 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
         if self.op_start.get() {
             let next_read_val = cookie_to_test_value(self.storage.current_read_offset());
             if self.read_val.get() < next_read_val {
-                debug!("Increasing read value from {} to {} due to clobbering!", self.read_val.get(), next_read_val);
+                debug!(
+                    "Increasing read value from {} to {} due to clobbering!",
+                    self.read_val.get(),
+                    next_read_val
+                );
                 self.read_val.set(next_read_val);
             }
         }
@@ -313,7 +300,8 @@ impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
     fn seek_done(&self, error: ReturnCode) {
         if error == ReturnCode::SUCCESS {
             debug!("Seeked");
-            self.read_val.set(cookie_to_test_value(self.storage.current_read_offset()));
+            self.read_val
+                .set(cookie_to_test_value(self.storage.current_read_offset()));
         } else {
             panic!("Seek failed: {:?}", error);
         }
@@ -348,8 +336,6 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
         self.wait();
     }
 
-    fn erase_done(&self, _error: ReturnCode) {}
-
     fn sync_done(&self, error: ReturnCode) {
         if error == ReturnCode::SUCCESS {
             debug!(
@@ -364,11 +350,74 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
         self.next_op();
         self.run();
     }
+
+    fn erase_done(&self, error: ReturnCode) {
+        match error {
+            ReturnCode::SUCCESS => {
+                // Make sure that flash has been erased.
+                for i in 0..TEST_LOG.len() {
+                    if TEST_LOG[i] != 0xFF {
+                        // TODO: Usually a few bytes in the middle aren't erased. Why?
+                        /*panic!(
+                            "Log not properly erased, read {} at byte {}. SUMMARY: {:?}",
+                            TEST_LOG[i],
+                            i,
+                            &TEST_LOG[i-8..i+8]
+                        );*/
+                        debug!("F{}", i);
+                    }
+                }
+
+                // Make sure that a read on an empty log fails normally.
+                self.buffer.take().map(move |buffer| {
+                    if let Err((error, original_buffer)) = self.storage.read(buffer, BUFFER_LEN) {
+                        self.buffer.replace(original_buffer);
+                        match error {
+                            ReturnCode::FAIL => (),
+                            ReturnCode::EBUSY => {
+                                self.wait();
+                                return;
+                            }
+                            _ => panic!("Read on empty log did not fail as expected: {:?}", error),
+                        }
+                    } else {
+                        panic!("Read on empty log succeeded! (it shouldn't)");
+                    }
+                });
+
+                // Move to next operation.
+                debug!("Log Storage erased");
+                self.erase.set(false);
+                self.run();
+            }
+            ReturnCode::EBUSY => {
+                // Flash busy, try again.
+                self.wait();
+            }
+            _ => {
+                panic!("Erase failed: {:?}", error);
+            }
+        }
+    }
 }
 
 impl<A: Alarm<'static>> AlarmClient for LogStorageTest<A> {
     fn fired(&self) {
         self.run();
+    }
+}
+
+impl<A: Alarm<'static>> gpio::Client for LogStorageTest<A> {
+    fn fired(&self) {
+        // Reset test (note: this will only work if the test is not in the middle of an operation).
+        self.op_index.set(0);
+        self.op_start.set(true);
+        self.read_val.set(0);
+        self.write_val.set(0);
+
+        // Erase log.
+        self.erase.set(true);
+        self.erase();
     }
 }
 
@@ -386,6 +435,6 @@ fn cookie_to_test_value(cookie: StorageCookie) -> u64 {
             let hanging_entries = (cookie % PAGE_SIZE - PAGE_HEADER_SIZE) / entry_size;
             (pages_written * entries_per_page + hanging_entries) as u64
         }
-        StorageCookie::SeekBeginning => 0
+        StorageCookie::SeekBeginning => 0,
     }
 }

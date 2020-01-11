@@ -53,11 +53,11 @@ pub trait LogWrite {
     /// Get cookie representing current append position.
     fn current_append_offset(&self) -> StorageCookie;
 
-    /// Erase the entire log.
-    fn erase(&self) -> ReturnCode;
-
     /// Sync log to storage.
     fn sync(&self) -> ReturnCode;
+
+    /// Erase the entire log.
+    fn erase(&self) -> ReturnCode;
 }
 
 /// Receive callbacks from `LogWrite`.
@@ -70,7 +70,7 @@ pub trait LogWriteClient {
         error: ReturnCode,
     );
 
-    fn erase_done(&self, error: ReturnCode);
-
     fn sync_done(&self, error: ReturnCode);
+
+    fn erase_done(&self, error: ReturnCode);
 }
