@@ -92,6 +92,14 @@ const WAIT_MS: u32 = 2;
 // Magic number to write to log storage (+ offset).
 const MAGIC: u64 = 0x0102030405060708;
 
+// Test's current state.
+#[derive(Clone, Copy, PartialEq)]
+enum TestState {
+    Operate, // Running through test operations.
+    Erase,   // Erasing log and restarting test.
+    CleanUp, // Cleaning up test after all operations complete.
+}
+
 // A single operation within the test.
 #[derive(Clone, Copy, PartialEq)]
 enum TestOp {
@@ -111,10 +119,10 @@ struct LogStorageTest<A: Alarm<'static>> {
     storage: &'static LogStorage,
     buffer: TakeCell<'static, [u8]>,
     alarm: A,
+    state: Cell<TestState>,
     ops: &'static [TestOp],
     op_index: Cell<usize>,
     op_start: Cell<bool>,
-    erase: Cell<bool>,
     read_val: Cell<u64>,
     write_val: Cell<u64>,
 }
@@ -130,39 +138,54 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
         let read_val = cookie_to_test_value(storage.current_read_offset());
         let write_val = cookie_to_test_value(storage.current_append_offset());
 
+        debug!(
+            "Log recovered from flash (Start and end cookies: {:?} to {:?})",
+            storage.current_read_offset(),
+            storage.current_append_offset()
+        );
+
         LogStorageTest {
             storage,
             buffer: TakeCell::new(buffer),
             alarm,
+            state: Cell::new(TestState::Operate),
             ops,
             op_index: Cell::new(0),
             op_start: Cell::new(true),
-            erase: Cell::new(false),
             read_val: Cell::new(read_val),
             write_val: Cell::new(write_val),
         }
     }
 
     fn run(&self) {
-        if self.erase.get() {
-            self.erase();
-        } else {
-            let op_index = self.op_index.get();
-            if op_index == self.ops.len() {
-                debug!("Log Storage test succeeded!");
-                return;
-            }
-
-            match self.ops[op_index] {
-                TestOp::Read => self.read(),
-                TestOp::Write => self.write(),
-                TestOp::Sync => self.sync(),
-                TestOp::Seek(cookie) => self.seek(cookie),
-                TestOp::SetReadVal(read_val) => {
-                    self.read_val.set(read_val);
-                    self.next_op();
-                    self.run();
+        match self.state.get() {
+            TestState::Operate => {
+                let op_index = self.op_index.get();
+                if op_index == self.ops.len() {
+                    self.state.set(TestState::CleanUp);
+                    self.storage.seek(StorageCookie::SeekBeginning);
+                    return;
                 }
+
+                match self.ops[op_index] {
+                    TestOp::Read => self.read(),
+                    TestOp::Write => self.write(),
+                    TestOp::Sync => self.sync(),
+                    TestOp::Seek(cookie) => self.seek(cookie),
+                    TestOp::SetReadVal(read_val) => {
+                        self.read_val.set(read_val);
+                        self.next_op();
+                        self.run();
+                    }
+                }
+            }
+            TestState::Erase => self.erase(),
+            TestState::CleanUp => {
+                debug!(
+                    "Log Storage test succeeded! (Final log start and end cookies: {:?} to {:?})",
+                    self.storage.current_read_offset(),
+                    self.storage.current_append_offset()
+                );
             }
         }
     }
@@ -306,7 +329,9 @@ impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
             panic!("Seek failed: {:?}", error);
         }
 
-        self.next_op();
+        if self.state.get() == TestState::Operate {
+            self.next_op();
+        }
         self.run();
     }
 }
@@ -387,7 +412,7 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
 
                 // Move to next operation.
                 debug!("Log Storage erased");
-                self.erase.set(false);
+                self.state.set(TestState::Operate);
                 self.run();
             }
             ReturnCode::EBUSY => {
@@ -416,7 +441,7 @@ impl<A: Alarm<'static>> gpio::Client for LogStorageTest<A> {
         self.write_val.set(0);
 
         // Erase log.
-        self.erase.set(true);
+        self.state.set(TestState::Erase);
         self.erase();
     }
 }

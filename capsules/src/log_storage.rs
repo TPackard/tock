@@ -142,58 +142,56 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
             if cookie % self.volume.len() == header_cookie {
                 if cookie < oldest_cookie {
                     oldest_cookie = cookie;
-                } else if cookie > newest_cookie {
+                }
+                if cookie > newest_cookie {
                     newest_cookie = cookie;
                 }
             }
         }
 
-        // Recover start and end of log from page header cookies.
-        let last_page_pos = newest_cookie % self.volume.len();
-        oldest_cookie += PAGE_HEADER_SIZE;
-        newest_cookie += PAGE_HEADER_SIZE;
+        // Walk entries in last (newest) page to find length of valid data in last page.
+        let mut last_page_len = PAGE_HEADER_SIZE;
+        loop {
+            // Check if next byte is start of valid entry.
+            let volume_offset = newest_cookie % self.volume.len() + last_page_len;
+            if self.volume[volume_offset] == 0 || self.volume[volume_offset] == PAD_BYTE {
+                break;
+            }
 
-        // Walk entries in newest page to find end of valid page data.
-        // TODO: can read invalidly high cookies.
-        while newest_cookie % self.page_size != 0
-            && self.volume[newest_cookie % self.volume.len()] != 0
-            && self.volume[newest_cookie % self.volume.len()] != PAD_BYTE
-        {
             // Get next entry length.
             let entry_length = {
                 const LENGTH_SIZE: usize = size_of::<usize>();
-                let volume_offset = newest_cookie % self.volume.len();
                 let length_bytes = &self.volume[volume_offset..volume_offset + LENGTH_SIZE];
                 let length_bytes = <[u8; LENGTH_SIZE]>::try_from(length_bytes).unwrap();
                 usize::from_ne_bytes(length_bytes)
-            };
+            } + ENTRY_HEADER_SIZE;
 
-            newest_cookie += ENTRY_HEADER_SIZE + entry_length;
+            // Add to page length if length is valid (fits within remainder of page.
+            if last_page_len + entry_length <= self.page_size {
+                last_page_len += entry_length;
+            } else {
+                break;
+            }
         }
 
         // Set cookies.
-        self.oldest_cookie.set(oldest_cookie);
-        self.read_cookie.set(oldest_cookie);
-        self.append_cookie.set(newest_cookie);
+        self.oldest_cookie.set(oldest_cookie + PAGE_HEADER_SIZE);
+        self.read_cookie.set(oldest_cookie + PAGE_HEADER_SIZE);
+        self.append_cookie.set(newest_cookie + last_page_len);
 
         // Populate page buffer.
         self.pagebuffer.take().map(move |pagebuffer| {
-            if newest_cookie % self.page_size == 0 {
+            if last_page_len % self.page_size == 0 {
                 // Last page full, reset pagebuffer for next page.
                 self.reset_pagebuffer(pagebuffer);
             } else {
                 // Copy last page into pagebuffer.
                 for i in 0..self.page_size {
-                    pagebuffer.as_mut()[i] = self.volume[last_page_pos + i];
+                    pagebuffer.as_mut()[i] = self.volume[newest_cookie % self.volume.len() + i];
                 }
             }
             self.pagebuffer.replace(pagebuffer);
         });
-
-        debug!(
-            "Recovered log (read: {}, append: {})",
-            oldest_cookie, newest_cookie
-        );
     }
 
     /// Advances read_cookie to the start of the next log entry. Returns the length of the entry
