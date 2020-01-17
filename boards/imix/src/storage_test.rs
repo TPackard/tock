@@ -58,8 +58,9 @@ pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
     log_storage_test.run();
 }
 
-static TEST_OPS: [TestOp; 13] = [
+static TEST_OPS: [TestOp; 15] = [
     // Read back any existing entries.
+    TestOp::ReadBad,
     TestOp::Read,
     // Write multiple pages, but don't fill log.
     TestOp::Write,
@@ -73,6 +74,7 @@ static TEST_OPS: [TestOp; 13] = [
     TestOp::Seek(StorageCookie::SeekBeginning),
     TestOp::Write,
     // Read offset should be incremented since it was invalidated by previous write.
+    TestOp::ReadBad,
     TestOp::Read,
     // Write multiple pages and sync. Read offset should be invalidated due to sync clobbering
     // previous read offset.
@@ -104,10 +106,10 @@ enum TestState {
 #[derive(Clone, Copy, PartialEq)]
 enum TestOp {
     Read,
+    ReadBad,
     Write,
     Sync,
     Seek(StorageCookie),
-    SetReadVal(u64),
 }
 
 type LogStorage = log_storage::LogStorage<
@@ -169,14 +171,10 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
 
                 match self.ops[op_index] {
                     TestOp::Read => self.read(),
+                    TestOp::ReadBad => self.read_bad(),
                     TestOp::Write => self.write(),
                     TestOp::Sync => self.sync(),
                     TestOp::Seek(cookie) => self.seek(cookie),
-                    TestOp::SetReadVal(read_val) => {
-                        self.read_val.set(read_val);
-                        self.next_op();
-                        self.run();
-                    }
                 }
             }
             TestState::Erase => self.erase(),
@@ -219,7 +217,7 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
             }
         }
 
-        self.buffer.take().map(move |buffer| {
+        self.buffer.take().map_or_else(|| panic!("NO BUFFER"), move |buffer| {
             // Clear buffer first to make debugging more sane.
             buffer.clone_from_slice(&0u64.to_be_bytes());
 
@@ -236,11 +234,45 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
                         self.next_op();
                         self.run();
                     }
-                    ReturnCode::EBUSY => self.wait(),
-                    _ => panic!("READ FAILED: {:?}", error),
+                    ReturnCode::EBUSY => {
+                        debug!("Flash busy, waiting before reattempting read");
+                        self.wait();
+                    }
+                    _ => panic!("READ #{} FAILED: {:?}", self.read_val.get(), error),
                 }
             }
         });
+    }
+
+    fn read_bad(&self) {
+        // Ensure failure if buffer is smaller than provided max read length.
+        self.buffer.take().map_or_else(|| panic!("NO BUFFER"), move |buffer| {
+            match self.storage.read(buffer, buffer.len() + 1) {
+                Ok(_) => panic!("Read with too-large max read length succeeded unexpectedly!"),
+                Err((error, original_buffer)) => {
+                    self.buffer.replace(original_buffer);
+                    assert_eq!(error, ReturnCode::EINVAL);
+                }
+            }
+        });
+
+        // Ensure failure if buffer is too small to hold entry.
+        self.buffer.take().map_or_else(|| panic!("NO BUFFER"), move |buffer| {
+            match self.storage.read(buffer, BUFFER_LEN - 1) {
+                Ok(_) => panic!("Read with too-small buffer succeeded unexpectedly!"),
+                Err((error, original_buffer)) => {
+                    self.buffer.replace(original_buffer);
+                    if self.read_val.get() == self.write_val.get() {
+                        assert_eq!(error, ReturnCode::FAIL);
+                    } else {
+                        assert_eq!(error, ReturnCode::ESIZE);
+                    }
+                }
+            }
+        });
+
+        self.next_op();
+        self.run();
     }
 
     fn write(&self) {
@@ -314,8 +346,7 @@ impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
                 self.wait();
             }
             _ => {
-                debug!("Read failed, trying again");
-                self.wait();
+                panic!("Read failed unexpectedly!");
             }
         }
     }

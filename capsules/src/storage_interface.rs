@@ -7,7 +7,6 @@ pub enum StorageCookie {
     SeekBeginning,
     Cookie(usize),
 }
-//pub const SEEK_BEGINNING: StorageCookie = 0;
 
 pub trait HasClient<'a, C> {
     /// Set the client for a storage interface. The client will be called when

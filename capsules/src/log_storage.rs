@@ -27,11 +27,16 @@ enum State {
     Sync(bool), // Boolean flag for whether or not to make client callback.
 }
 
+/* TODO GENERAL:
+ * Should functions that take a buffer also take a length or operate on entire buffer slice?
+ * Make sure log state is used and checked consistently.
+ */
+
 pub struct LogStorage<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> {
     /// Underlying storage volume.
     volume: &'static [u8],
     /// Capacity of log in bytes.
-    capacity: usize,
+    capacity: StorageLen,
     /// Flash interface.
     driver: &'a F,
     /// Buffer for a flash page.
@@ -194,79 +199,87 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
         });
     }
 
-    /// Advances read_cookie to the start of the next log entry. Returns the length of the entry
-    /// on success, or an error otherwise.
-    fn get_next_entry(&self, pagebuffer: &mut F::Page) -> Result<usize, ReturnCode> {
-        // Check if end of log was reached.
-        let mut read_cookie = self.read_cookie.get();
-        if read_cookie == self.append_cookie.get() {
-            return Err(ReturnCode::FAIL);
-        }
+    /// Returns the cookie of the next entry to read or an error if no entry could be retrieved.
+    /// ReturnCodes used:
+    ///     * FAIL: reached end of log, nothing to read.
+    ///     * ERESERVE: client or internal pagebuffer missing.
+    fn get_next_entry(&self) -> Result<usize, ReturnCode> {
+        self.pagebuffer.take().map_or(Err(ReturnCode::ERESERVE), move |pagebuffer| {
+            let mut entry_cookie = self.read_cookie.get();
 
-        // Skip padded bytes and page header if at end of page.
-        if read_cookie % self.page_size == 0 {
-            read_cookie += PAGE_HEADER_SIZE;
-            self.read_cookie.set(read_cookie);
-        } else if self.get_byte(read_cookie, pagebuffer) == PAD_BYTE {
-            read_cookie += self.page_size - read_cookie % self.page_size + PAGE_HEADER_SIZE;
-            self.read_cookie.set(read_cookie);
-
-            if read_cookie == self.append_cookie.get() {
-                return Err(ReturnCode::FAIL);
+            // Skip page header if at start of page or skip padded bytes if at end of page.
+            if entry_cookie % self.page_size == 0 {
+                entry_cookie += PAGE_HEADER_SIZE;
+            } else if self.get_byte(entry_cookie, pagebuffer) == PAD_BYTE {
+                entry_cookie += self.page_size - entry_cookie % self.page_size + PAGE_HEADER_SIZE;
             }
-        }
 
-        // Get length.
-        let length = {
-            // TODO: use u32 instead of usize everywhere?
+            // Check if end of log was reached and return.
+            self.pagebuffer.replace(pagebuffer);
+            if entry_cookie >= self.append_cookie.get() {
+                Err(ReturnCode::FAIL)
+            } else {
+                Ok(entry_cookie)
+            }
+        })
+    }
+
+    /// Reads and returns the contents of an entry header at the given cookie. Fails if the header
+    /// data is invalid.
+    /// ReturnCodes used:
+    ///     * FAIL: entry header invalid.
+    ///     * ERESERVE: client or internal pagebuffer missing.
+    fn read_entry_header(&self, entry_cookie: usize) -> Result<usize, ReturnCode> {
+        self.pagebuffer.take().map_or(Err(ReturnCode::ERESERVE), move |pagebuffer| {
+            // Get length.
             const LENGTH_SIZE: usize = size_of::<usize>();
-            let length_bytes = self.get_bytes(read_cookie, LENGTH_SIZE, pagebuffer);
+            let length_bytes = self.get_bytes(entry_cookie, LENGTH_SIZE, pagebuffer);
             let length_bytes = <[u8; LENGTH_SIZE]>::try_from(length_bytes).unwrap();
-            usize::from_ne_bytes(length_bytes)
-        };
+            let length = usize::from_ne_bytes(length_bytes);
 
-        // Return length of next entry.
-        if length == INVALID_ENTRY_LENGTH || length == 0 {
-            Err(ReturnCode::FAIL)
-        } else {
-            Ok(length)
-        }
+            // Return length of next entry.
+            self.pagebuffer.replace(pagebuffer);
+            if length == 0 || length > self.page_size - PAGE_HEADER_SIZE - ENTRY_HEADER_SIZE {
+                Err(ReturnCode::FAIL)
+            } else {
+                Ok(length)
+            }
+        })
     }
 
     /// Reads the next entry into a buffer. Returns the number of bytes read on success, or an
     /// error otherwise.
+    /// ReturnCodes used:
+    ///     * FAIL: reached end of log, nothing to read.
+    ///     * ERESERVE: internal pagebuffer missing, log is presumably broken.
+    ///     * ESIZE: buffer not large enough to contain entry being read.
     fn read_entry(&self, buffer: &mut [u8], length: usize) -> Result<usize, ReturnCode> {
+        // Get next entry to read. Immediately returns FAIL in event of failure.
+        let entry_cookie = self.get_next_entry()?;
+        let entry_length = self.read_entry_header(entry_cookie)?;
+
+        // Read entry into buffer.
         self.pagebuffer
             .take()
             .map_or(Err(ReturnCode::ERESERVE), move |pagebuffer| {
-                // Read entry header.
-                let entry_length = self.get_next_entry(pagebuffer);
-                match entry_length {
-                    Ok(entry_length) => {
-                        // Ensure buffer is large enough to hold log entry.
-                        if entry_length > length {
-                            return Err(ReturnCode::ESIZE);
-                        }
-                        let read_cookie = self.read_cookie.get() + ENTRY_HEADER_SIZE;
-
-                        // Copy data into client buffer.
-                        let data = self.get_bytes(read_cookie, entry_length, pagebuffer);
-                        for i in 0..entry_length {
-                            buffer[i] = data[i];
-                        }
-
-                        // Update read offset.
-                        self.read_cookie.set(read_cookie + entry_length);
-                        self.pagebuffer.replace(pagebuffer);
-
-                        Ok(entry_length)
-                    }
-                    error => {
-                        self.pagebuffer.replace(pagebuffer);
-                        error
-                    }
+                // Ensure buffer is large enough to hold log entry.
+                if entry_length > length {
+                    self.pagebuffer.replace(pagebuffer);
+                    return Err(ReturnCode::ESIZE);
                 }
-            })
+                let entry_cookie = entry_cookie + ENTRY_HEADER_SIZE;
+
+                // Copy data into client buffer.
+                let data = self.get_bytes(entry_cookie, entry_length, pagebuffer);
+                for i in 0..entry_length {
+                    buffer[i] = data[i];
+                }
+
+                // Update read cookie and return number of bytes read.
+                self.read_cookie.set(entry_cookie + entry_length);
+                self.pagebuffer.replace(pagebuffer);
+                Ok(entry_length)
+        })
     }
 
     /// Writes an entry header at the given cookie within a page. Returns number of bytes
@@ -376,6 +389,9 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
             pagebuffer.as_mut()[index] = cookie_bytes[index];
         }
 
+        // TODO: this does not seem like the right place to do this.
+        // TODO: cannot be allowed to wrap if log is non-circular.
+        // This is the only place where the append cookie can cross page boundaries.
         self.append_cookie.set(append_cookie + PAGE_HEADER_SIZE);
     }
 
@@ -398,35 +414,50 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> HasClient<'a, C>
 }
 
 impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogRead for LogStorage<'a, F, C> {
-    /// Read a log entry into a buffer.
+    /// Read a log entry into a buffer, if there are any remaining. Updates the read cookie to
+    /// point at the next entry when done.
+    /// Returns:
+    ///     * Ok(()) on success.
+    ///     * Err((ReturnCode, buffer)) on failure.
+    /// ReturnCodes used:
+    ///     * FAIL: reached end of log, nothing to read.
+    ///     * EBUSY: log busy with another operation, try again later.
+    ///     * EINVAL: provided client buffer is too small.
+    ///     * ECANCEL: invalid internal state, read cookie was reset to SeekBeginning.
+    ///     * ERESERVE: client or internal pagebuffer missing.
+    ///     * ESIZE: buffer not large enough to contain entry being read.
     fn read(
         &self,
         buffer: &'static mut [u8],
         length: usize,
     ) -> Result<(), (ReturnCode, &'static mut [u8])> {
+        // Check for failure cases.
         if self.state.get() != State::Idle {
+            // Log busy, try reading again later.
             return Err((ReturnCode::EBUSY, buffer));
         } else if buffer.len() < length {
+            // Client buffer too small for provided length.
             return Err((ReturnCode::EINVAL, buffer));
+        } else if self.read_cookie.get() > self.append_cookie.get() {
+            // Read cookie beyond append cookie, must be invalid.
+            // TODO: is this an appropriate response for an invalid read cookie?
+            self.read_cookie.set(self.oldest_cookie.get());
+            return Err((ReturnCode::ECANCEL, buffer));
+        } else if self.client.is_none() {
+            // No client for callback.
+            return Err((ReturnCode::ERESERVE, buffer));
         }
 
-        // Ensure end of log hasn't been reached.
-        // TODO: what about checking to make sure read_cookie < append_cookie?
-        let read_cookie = self.read_cookie.get();
-        // TODO: incorrect calculation of storage capacity. Replace this with ability to detect end
-        // of log, regardless of whether or not it's circular.
-        if !self.circular && read_cookie + length >= self.volume.len() {
-            Err((ReturnCode::FAIL, buffer))
-        } else {
-            match self.read_entry(buffer, length) {
-                Ok(bytes_read) => {
-                    self.client.map(move |client| {
-                        client.read_done(buffer, bytes_read, ReturnCode::SUCCESS);
-                    });
-                    Ok(())
-                }
-                Err(return_code) => Err((return_code, buffer)),
+        // Try reading next entry.
+        match self.read_entry(buffer, length) {
+            Ok(bytes_read) => {
+                // TODO: no client callbacks within original function?
+                self.client.map(move |client| {
+                    client.read_done(buffer, bytes_read, ReturnCode::SUCCESS);
+                });
+                Ok(())
             }
+            Err(return_code) => Err((return_code, buffer)),
         }
     }
 
@@ -483,6 +514,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
             && self.append_cookie.get() + length + ENTRY_HEADER_SIZE >= self.volume.len()
         {
             // End of non-circular log has been reached.
+            // TODO: need to ensure that append cookie NEVER goes beyond end of non-circular log.
             Err((ReturnCode::FAIL, buffer))
         } else {
             // Check if new entry will fit into current page.
@@ -567,7 +599,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
                         // Reset pagebuffer and finish writing on the new page.
                         self.reset_pagebuffer(pagebuffer);
                         self.buffer.take().map_or_else(
-                            || panic!("No buffer"),
+                            || unreachable!(),
                             move |buffer| {
                                 self.append_entry(buffer, self.length.get(), pagebuffer);
                             },
