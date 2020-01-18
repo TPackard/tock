@@ -58,9 +58,9 @@ pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
     log_storage_test.run();
 }
 
-static TEST_OPS: [TestOp; 15] = [
+static TEST_OPS: [TestOp; 20] = [
     // Read back any existing entries.
-    TestOp::ReadBad,
+    TestOp::BadRead,
     TestOp::Read,
     // Write multiple pages, but don't fill log.
     TestOp::Write,
@@ -74,13 +74,19 @@ static TEST_OPS: [TestOp; 15] = [
     TestOp::Seek(StorageCookie::SeekBeginning),
     TestOp::Write,
     // Read offset should be incremented since it was invalidated by previous write.
-    TestOp::ReadBad,
+    TestOp::BadRead,
     TestOp::Read,
     // Write multiple pages and sync. Read offset should be invalidated due to sync clobbering
     // previous read offset.
     TestOp::Write,
     TestOp::Sync,
     TestOp::Read,
+    // Try bad seeks, should fail and not change read cookie.
+    TestOp::Write,
+    TestOp::BadSeek(StorageCookie::Cookie(0)),
+    TestOp::BadSeek(StorageCookie::Cookie(core::usize::MAX)),
+    TestOp::Read,
+    TestOp::Sync,
 ];
 
 // Buffer for reading from and writing to in the storage tests.
@@ -106,10 +112,11 @@ enum TestState {
 #[derive(Clone, Copy, PartialEq)]
 enum TestOp {
     Read,
-    ReadBad,
+    BadRead,
     Write,
     Sync,
     Seek(StorageCookie),
+    BadSeek(StorageCookie),
 }
 
 type LogStorage = log_storage::LogStorage<
@@ -171,10 +178,11 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
 
                 match self.ops[op_index] {
                     TestOp::Read => self.read(),
-                    TestOp::ReadBad => self.read_bad(),
+                    TestOp::BadRead => self.bad_read(),
                     TestOp::Write => self.write(),
                     TestOp::Sync => self.sync(),
                     TestOp::Seek(cookie) => self.seek(cookie),
+                    TestOp::BadSeek(cookie) => self.bad_seek(cookie),
                 }
             }
             TestState::Erase => self.erase(),
@@ -217,48 +225,53 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
             }
         }
 
-        self.buffer.take().map_or_else(|| panic!("NO BUFFER"), move |buffer| {
-            // Clear buffer first to make debugging more sane.
-            buffer.clone_from_slice(&0u64.to_be_bytes());
+        self.buffer.take().map_or_else(
+            || panic!("NO BUFFER"),
+            move |buffer| {
+                // Clear buffer first to make debugging more sane.
+                buffer.clone_from_slice(&0u64.to_be_bytes());
 
-            if let Err((error, original_buffer)) = self.storage.read(buffer, BUFFER_LEN) {
-                self.buffer.replace(original_buffer);
-                match error {
-                    ReturnCode::FAIL => {
-                        // No more entries, start writing again.
-                        debug!(
-                            "READ DONE: READ OFFSET: {:?} / WRITE OFFSET: {:?}",
-                            self.storage.current_read_offset(),
-                            self.storage.current_append_offset()
-                        );
-                        self.next_op();
-                        self.run();
+                if let Err((error, original_buffer)) = self.storage.read(buffer, BUFFER_LEN) {
+                    self.buffer.replace(original_buffer);
+                    match error {
+                        ReturnCode::FAIL => {
+                            // No more entries, start writing again.
+                            debug!(
+                                "READ DONE: READ OFFSET: {:?} / WRITE OFFSET: {:?}",
+                                self.storage.current_read_offset(),
+                                self.storage.current_append_offset()
+                            );
+                            self.next_op();
+                            self.run();
+                        }
+                        ReturnCode::EBUSY => {
+                            debug!("Flash busy, waiting before reattempting read");
+                            self.wait();
+                        }
+                        _ => panic!("READ #{} FAILED: {:?}", self.read_val.get(), error),
                     }
-                    ReturnCode::EBUSY => {
-                        debug!("Flash busy, waiting before reattempting read");
-                        self.wait();
-                    }
-                    _ => panic!("READ #{} FAILED: {:?}", self.read_val.get(), error),
                 }
-            }
-        });
+            },
+        );
     }
 
-    fn read_bad(&self) {
+    fn bad_read(&self) {
         // Ensure failure if buffer is smaller than provided max read length.
-        self.buffer.take().map_or_else(|| panic!("NO BUFFER"), move |buffer| {
-            match self.storage.read(buffer, buffer.len() + 1) {
+        self.buffer.take().map_or_else(
+            || panic!("NO BUFFER"),
+            move |buffer| match self.storage.read(buffer, buffer.len() + 1) {
                 Ok(_) => panic!("Read with too-large max read length succeeded unexpectedly!"),
                 Err((error, original_buffer)) => {
                     self.buffer.replace(original_buffer);
                     assert_eq!(error, ReturnCode::EINVAL);
                 }
-            }
-        });
+            },
+        );
 
         // Ensure failure if buffer is too small to hold entry.
-        self.buffer.take().map_or_else(|| panic!("NO BUFFER"), move |buffer| {
-            match self.storage.read(buffer, BUFFER_LEN - 1) {
+        self.buffer.take().map_or_else(
+            || panic!("NO BUFFER"),
+            move |buffer| match self.storage.read(buffer, BUFFER_LEN - 1) {
                 Ok(_) => panic!("Read with too-small buffer succeeded unexpectedly!"),
                 Err((error, original_buffer)) => {
                     self.buffer.replace(original_buffer);
@@ -268,8 +281,8 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
                         assert_eq!(error, ReturnCode::ESIZE);
                     }
                 }
-            }
-        });
+            },
+        );
 
         self.next_op();
         self.run();
@@ -301,6 +314,27 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
             ReturnCode::SUCCESS => debug!("Seeking to {:?}...", cookie),
             error => panic!("Seek failed: {:?}", error),
         }
+    }
+
+    fn bad_seek(&self, cookie: StorageCookie) {
+        // Make sure seek fails with EINVAL.
+        let original_offset = self.storage.current_read_offset();
+        match self.storage.seek(cookie) {
+            ReturnCode::EINVAL => (),
+            ReturnCode::SUCCESS => panic!(
+                "Seek to invalid cookie {:?} succeeded unexpectedly!",
+                cookie
+            ),
+            error => panic!(
+                "Seek to invalid cookie {:?} failed with unexpected error {:?}!",
+                cookie, error
+            ),
+        }
+
+        // Make sure that read offset was not changed by failed seek.
+        assert_eq!(original_offset, self.storage.current_read_offset());
+        self.next_op();
+        self.run();
     }
 
     fn wait(&self) {
