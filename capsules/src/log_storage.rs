@@ -11,9 +11,9 @@ use kernel::hil::flash::{self, Flash};
 use kernel::ReturnCode;
 
 /// Maximum page header size.
-const PAGE_HEADER_SIZE: usize = size_of::<usize>();
+pub const PAGE_HEADER_SIZE: usize = size_of::<usize>();
 /// Maximum entry header size.
-const ENTRY_HEADER_SIZE: usize = size_of::<usize>();
+pub const ENTRY_HEADER_SIZE: usize = size_of::<usize>();
 
 /// Byte used to pad the end of a page.
 const PAD_BYTE: u8 = 0xFF;
@@ -27,8 +27,12 @@ enum State {
 
 /* TODO GENERAL:
  * Should functions that take a buffer also take a length or operate on entire buffer slice?
- * Make sure log state is used and checked consistently.
+ *
+ * Make sure log state is used and checked consistently. Make sure log state is reset to Idle int
+ * the event of an error.
+ *
  * No calls to `map`, should only use `map_or` or `map_or_else`.
+ *
  * Remove debug statements.
  */
 
@@ -105,7 +109,10 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
 
     /// Gets the buffer containing the given cookie.
     fn get_buffer<'b>(&self, cookie: usize, pagebuffer: &'b mut F::Page) -> &'b [u8] {
-        if cookie / self.page_size == self.append_cookie.get() / self.page_size {
+        // Subtract 1 from append cookie to get cookie of last bit written. This is needed because
+        // the pagebuffer always contains the last written bit, but not necessarily the append
+        // cookie (i.e. the pagebuffer isn't flushed yet when append_cookie % page_size == 0).
+        if cookie / self.page_size == (self.append_cookie.get() - 1) / self.page_size {
             pagebuffer.as_mut()
         } else {
             self.volume
@@ -154,7 +161,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
             }
         }
 
-        // Walk entries in last (newest) page to find length of valid data in last page.
+        // Walk entries in last (newest) page to calculate last page length.
         let mut last_page_len = PAGE_HEADER_SIZE;
         loop {
             // Check if next byte is start of valid entry.
@@ -174,6 +181,9 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
             // Add to page length if length is valid (fits within remainder of page.
             if last_page_len + entry_length <= self.page_size {
                 last_page_len += entry_length;
+                if last_page_len == self.page_size {
+                    break;
+                }
             } else {
                 break;
             }
@@ -603,26 +613,17 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
     ///     * SUCCESS: append succeeded.
     ///     * FAIL: write failed due to flash error.
     fn sync(&self) -> ReturnCode {
-        let append_cookie = self.append_cookie.get();
-        if append_cookie % self.page_size == PAGE_HEADER_SIZE {
-            // Pagebuffer empty, don't need to sync.
-            self.client.map_or(ReturnCode::ERESERVE, move |client| {
-                client.sync_done(ReturnCode::SUCCESS);
-                ReturnCode::SUCCESS
-            })
-        } else {
-            self.pagebuffer
-                .take()
-                .map_or(ReturnCode::ERESERVE, move |pagebuffer| {
-                    self.state.set(State::Sync);
-                    let retval = self.flush_pagebuffer(pagebuffer);
+        self.pagebuffer
+            .take()
+            .map_or(ReturnCode::ERESERVE, move |pagebuffer| {
+                self.state.set(State::Sync);
+                let retval = self.flush_pagebuffer(pagebuffer);
 
-                    if retval != ReturnCode::SUCCESS {
-                        self.state.set(State::Idle);
-                    }
-                    retval
-                })
-        }
+                if retval != ReturnCode::SUCCESS {
+                    self.state.set(State::Idle);
+                }
+                retval
+            })
     }
 
     /// Erase the entire log.
@@ -656,6 +657,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
                 match self.state.get() {
                     State::Write => {
                         // Reset pagebuffer and finish writing on the new page.
+                        // TODO: don't write if end of non-circular buffer reached.
                         self.reset_pagebuffer(pagebuffer);
                         self.buffer
                             .take()
