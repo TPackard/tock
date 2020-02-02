@@ -1,5 +1,3 @@
-/// Yeah, so this should test the various storage abstractions that I'm going to make. It doesn't
-/// work right now.
 use capsules::log_storage;
 use capsules::storage_interface::{
     self, LogRead, LogReadClient, LogWrite, LogWriteClient, StorageCookie, StorageLen,
@@ -17,7 +15,7 @@ use kernel::ReturnCode;
 use sam4l::ast::Ast;
 use sam4l::flashcalw;
 
-// Allocate 1kB volume for log storage.
+// Allocate 2kiB volume for log storage.
 storage_volume!(TEST_LOG, 2);
 
 pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
@@ -159,9 +157,11 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
         let write_val = cookie_to_test_value(storage.current_append_offset());
 
         debug!(
-            "Log recovered from flash (Start and end cookies: {:?} to {:?})",
+            "Log recovered from flash (Start and end cookies: {:?} to {:?}; read and write values: {} and {})",
             storage.current_read_offset(),
-            storage.current_append_offset()
+            storage.current_append_offset(),
+            read_val,
+            write_val
         );
 
         LogStorageTest {
@@ -317,7 +317,7 @@ impl<A: Alarm<'static>> LogStorageTest<A> {
 
                     match error {
                         ReturnCode::EBUSY => self.wait(),
-                        _ => debug!("WRITE FAILED: {:?}", error),
+                        _ => panic!("WRITE FAILED: {:?}", error),
                     }
                 }
             })
@@ -474,6 +474,7 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
         _records_lost: bool,
         _error: ReturnCode,
     ) {
+        // TODO: check length, records_lost, error.
         self.buffer.replace(buffer);
         self.op_start.set(false);
 
@@ -509,14 +510,25 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
     fn erase_done(&self, error: ReturnCode) {
         match error {
             ReturnCode::SUCCESS => {
+                // Reset test state.
+                self.op_index.set(0);
+                self.op_start.set(true);
+                self.read_val.set(0);
+                self.write_val.set(0);
+
                 // Make sure that flash has been erased.
                 for i in 0..TEST_LOG.len() {
-                    if TEST_LOG[i] != 0xFF {
+                    let val = TEST_LOG[i];
+                    if val != 0xFF {
+                        // TODO: figure out what's going on...
+                        for j in 0..2 {
+                            debug!("Read back failure (time #{}): {:?}", j, &TEST_LOG[i..i+8]);
+                        }
                         panic!(
                             "Log not properly erased, read {} at byte {}. SUMMARY: {:?}",
-                            TEST_LOG[i],
+                            val,
                             i,
-                            &TEST_LOG[i - 8..i + 8]
+                            &TEST_LOG[i..i + 8]
                         );
                     }
                 }
@@ -562,12 +574,6 @@ impl<A: Alarm<'static>> AlarmClient for LogStorageTest<A> {
 
 impl<A: Alarm<'static>> gpio::Client for LogStorageTest<A> {
     fn fired(&self) {
-        // Reset test (note: this will only work if the test is not in the middle of an operation).
-        self.op_index.set(0);
-        self.op_start.set(true);
-        self.read_val.set(0);
-        self.write_val.set(0);
-
         // Erase log.
         self.state.set(TestState::Erase);
         self.erase();

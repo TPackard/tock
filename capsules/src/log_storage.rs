@@ -18,11 +18,13 @@ pub const ENTRY_HEADER_SIZE: usize = size_of::<usize>();
 /// Byte used to pad the end of a page.
 const PAD_BYTE: u8 = 0xFF;
 
+/// Log state keeps track of any in-progress asynchronous operations.
 #[derive(Clone, Copy, PartialEq)]
 enum State {
     Idle,
     Write,
     Sync,
+    Erase,
 }
 
 /* TODO GENERAL:
@@ -137,6 +139,21 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
         &buffer[offset..offset + num_bytes]
     }
 
+    /// Resets a log back to an empty log.
+    fn reset(&self) {
+        self.oldest_cookie.set(PAGE_HEADER_SIZE);
+        self.read_cookie.set(PAGE_HEADER_SIZE);
+        self.append_cookie.set(PAGE_HEADER_SIZE);
+        self.pagebuffer
+            .take()
+            .map(move |pagebuffer| {
+                for e in pagebuffer.as_mut().iter_mut() {
+                    *e = 0;
+                }
+                self.pagebuffer.replace(pagebuffer);
+            }).unwrap();
+    }
+
     /// Reconstructs a log from flash.
     fn reconstruct(&self) {
         // Read page headers, get oldest and newest cookies.
@@ -161,53 +178,58 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
             }
         }
 
-        // Walk entries in last (newest) page to calculate last page length.
-        let mut last_page_len = PAGE_HEADER_SIZE;
-        loop {
-            // Check if next byte is start of valid entry.
-            let volume_offset = newest_cookie % self.volume.len() + last_page_len;
-            if self.volume[volume_offset] == 0 || self.volume[volume_offset] == PAD_BYTE {
-                break;
-            }
-
-            // Get next entry length.
-            let entry_length = {
-                const LENGTH_SIZE: usize = size_of::<usize>();
-                let length_bytes = &self.volume[volume_offset..volume_offset + LENGTH_SIZE];
-                let length_bytes = <[u8; LENGTH_SIZE]>::try_from(length_bytes).unwrap();
-                usize::from_ne_bytes(length_bytes)
-            } + ENTRY_HEADER_SIZE;
-
-            // Add to page length if length is valid (fits within remainder of page.
-            if last_page_len + entry_length <= self.page_size {
-                last_page_len += entry_length;
-                if last_page_len == self.page_size {
+        // Reconstruct log if at least one valid page was found (meaning oldest cookie was set).
+        if oldest_cookie != core::usize::MAX {
+            // Walk entries in last (newest) page to calculate last page length.
+            let mut last_page_len = PAGE_HEADER_SIZE;
+            loop {
+                // Check if next byte is start of valid entry.
+                let volume_offset = newest_cookie % self.volume.len() + last_page_len;
+                if self.volume[volume_offset] == 0 || self.volume[volume_offset] == PAD_BYTE {
                     break;
                 }
-            } else {
-                break;
-            }
-        }
 
-        // Set cookies.
-        self.oldest_cookie.set(oldest_cookie + PAGE_HEADER_SIZE);
-        self.read_cookie.set(oldest_cookie + PAGE_HEADER_SIZE);
-        self.append_cookie.set(newest_cookie + last_page_len);
+                // Get next entry length.
+                let entry_length = {
+                    const LENGTH_SIZE: usize = size_of::<usize>();
+                    let length_bytes = &self.volume[volume_offset..volume_offset + LENGTH_SIZE];
+                    let length_bytes = <[u8; LENGTH_SIZE]>::try_from(length_bytes).unwrap();
+                    usize::from_ne_bytes(length_bytes)
+                } + ENTRY_HEADER_SIZE;
 
-        // Populate page buffer.
-        // TODO: no unchecked map.
-        self.pagebuffer.take().map(move |pagebuffer| {
-            if last_page_len % self.page_size == 0 {
-                // Last page full, reset pagebuffer for next page.
-                self.reset_pagebuffer(pagebuffer);
-            } else {
-                // Copy last page into pagebuffer.
-                for i in 0..self.page_size {
-                    pagebuffer.as_mut()[i] = self.volume[newest_cookie % self.volume.len() + i];
+                // Add to page length if length is valid (fits within remainder of page.
+                if last_page_len + entry_length <= self.page_size {
+                    last_page_len += entry_length;
+                    if last_page_len == self.page_size {
+                        break;
+                    }
+                } else {
+                    break;
                 }
             }
-            self.pagebuffer.replace(pagebuffer);
-        });
+
+            // Set cookies.
+            self.oldest_cookie.set(oldest_cookie + PAGE_HEADER_SIZE);
+            self.read_cookie.set(oldest_cookie + PAGE_HEADER_SIZE);
+            self.append_cookie.set(newest_cookie + last_page_len);
+
+            // Populate page buffer.
+            self.pagebuffer.take().map(move |pagebuffer| {
+                if last_page_len % self.page_size == 0 {
+                    // Last page full, reset pagebuffer for next page.
+                    self.reset_pagebuffer(pagebuffer);
+                } else {
+                    // Copy last page into pagebuffer.
+                    for i in 0..self.page_size {
+                        pagebuffer.as_mut()[i] = self.volume[newest_cookie % self.volume.len() + i];
+                    }
+                }
+                self.pagebuffer.replace(pagebuffer);
+            }).unwrap();
+        } else {
+            // No valid pages found, create fresh log.
+            self.reset();
+        }
     }
 
     /// Returns the cookie of the next entry to read or an error if no entry could be retrieved.
@@ -396,6 +418,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
     /// pagebuffer or modify append cookie if the end of a non-circular log is reached.
     fn reset_pagebuffer(&self, pagebuffer: &mut F::Page) {
         // Make sure end of non-circular log has not been reached.
+        // TODO: return bool to signify if pagebuffer was actually reset or not?
         let mut append_cookie = self.append_cookie.get();
         if !self.circular && self.volume.len() - append_cookie < self.page_size {
             return;
@@ -421,6 +444,8 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
         // Uses oldest cookie to keep track of which page to erase. Thus, the oldest pages will be
         // erased first and the log will remain in a valid state even if it fails to be erased
         // completely.
+        // TODO: remove.
+        debug!("E{}", self.page_number(self.oldest_cookie.get()));
         self.driver
             .erase_page(self.page_number(self.oldest_cookie.get()))
     }
@@ -463,7 +488,6 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogRead for LogS
             return Err((ReturnCode::EINVAL, buffer));
         } else if self.read_cookie.get() > self.append_cookie.get() {
             // Read cookie beyond append cookie, must be invalid.
-            // TODO: is this an appropriate response for an invalid read cookie?
             self.read_cookie.set(self.oldest_cookie.get());
             return Err((ReturnCode::ECANCEL, buffer));
         } else if self.client.is_none() {
@@ -607,12 +631,17 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
     /// ReturnCodes used:
     ///     * SUCCESS: flush started successfully.
     ///     * FAIL: flash driver not configured.
-    ///     * EBUSY: flash driver busy.
+    ///     * EBUSY: log or flash driver busy, try again later.
     ///     * ERESERVE: no log client set.
     /// ReturnCodes used in sync_done callback:
     ///     * SUCCESS: append succeeded.
     ///     * FAIL: write failed due to flash error.
     fn sync(&self) -> ReturnCode {
+        if self.state.get() != State::Idle {
+            // Log busy, try syncing again later.
+            return ReturnCode::EBUSY;
+        }
+
         self.pagebuffer
             .take()
             .map_or(ReturnCode::ERESERVE, move |pagebuffer| {
@@ -627,7 +656,19 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
     }
 
     /// Erase the entire log.
+    /// ReturnCodes used:
+    ///     * SUCCESS: flush started successfully.
+    ///     * EBUSY: log busy, try again later.
+    /// ReturnCodes used in erase_done callback:
+    ///     * SUCCESS: erase succeeded.
+    ///     * EBUSY: erase interrupted by busy flash driver. Call erase again to resume.
     fn erase(&self) -> ReturnCode {
+        if self.state.get() != State::Idle {
+            // Log busy, try erasing again later.
+            return ReturnCode::EBUSY;
+        }
+
+        self.state.set(State::Erase);
         self.erase_page()
     }
 }
@@ -711,15 +752,14 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
         match error {
             flash::Error::CommandComplete => {
                 let oldest_cookie = self.oldest_cookie.get();
-                if self.page_number(oldest_cookie) == self.page_number(self.append_cookie.get()) {
-                    // Erased all pages. Reset cookies and callback client.
-                    self.read_cookie.set(PAGE_HEADER_SIZE);
-                    self.append_cookie.set(PAGE_HEADER_SIZE);
-                    self.oldest_cookie.set(PAGE_HEADER_SIZE);
+                if oldest_cookie >= self.append_cookie.get() - self.page_size {
+                    // Erased all pages. Reset state and callback client.
+                    self.state.set(State::Idle);
+                    self.reset();
 
-                    // TODO: no unchecked map!
                     self.client
-                        .map(move |client| client.erase_done(ReturnCode::SUCCESS));
+                        .map(move |client| client.erase_done(ReturnCode::SUCCESS))
+                        .unwrap();
                 } else {
                     // Not done, erase next page.
                     self.oldest_cookie.set(oldest_cookie + self.page_size);
@@ -727,18 +767,19 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
 
                     // Abort and alert client if flash driver is busy.
                     if status == ReturnCode::EBUSY {
+                        self.state.set(State::Idle);
                         self.read_cookie
                             .set(core::cmp::max(self.read_cookie.get(), oldest_cookie));
-                        // TODO: no unchecked map!
                         self.client
-                            .map(move |client| client.erase_done(ReturnCode::EBUSY));
+                            .map(move |client| client.erase_done(ReturnCode::EBUSY))
+                            .unwrap();
                     }
                 }
             }
-            flash::Error::FlashError => {
-                // TODO: handle errors.
-                panic!("FLASH ERROR");
-            }
+            flash::Error::FlashError => self
+                .client
+                .map(move |client| client.erase_done(ReturnCode::FAIL))
+                .unwrap(),
         }
     }
 }
