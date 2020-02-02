@@ -151,7 +151,8 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
                     *e = 0;
                 }
                 self.pagebuffer.replace(pagebuffer);
-            }).unwrap();
+            })
+            .unwrap();
     }
 
     /// Reconstructs a log from flash.
@@ -214,18 +215,22 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
             self.append_cookie.set(newest_cookie + last_page_len);
 
             // Populate page buffer.
-            self.pagebuffer.take().map(move |pagebuffer| {
-                if last_page_len % self.page_size == 0 {
-                    // Last page full, reset pagebuffer for next page.
-                    self.reset_pagebuffer(pagebuffer);
-                } else {
-                    // Copy last page into pagebuffer.
-                    for i in 0..self.page_size {
-                        pagebuffer.as_mut()[i] = self.volume[newest_cookie % self.volume.len() + i];
+            self.pagebuffer
+                .take()
+                .map(move |pagebuffer| {
+                    if last_page_len % self.page_size == 0 {
+                        // Last page full, reset pagebuffer for next page.
+                        self.reset_pagebuffer(pagebuffer);
+                    } else {
+                        // Copy last page into pagebuffer.
+                        for i in 0..self.page_size {
+                            pagebuffer.as_mut()[i] =
+                                self.volume[newest_cookie % self.volume.len() + i];
+                        }
                     }
-                }
-                self.pagebuffer.replace(pagebuffer);
-            }).unwrap();
+                    self.pagebuffer.replace(pagebuffer);
+                })
+                .unwrap();
         } else {
             // No valid pages found, create fresh log.
             self.reset();
@@ -415,13 +420,13 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
 
     /// Resets the pagebuffer so that new data can be written. Note that this also increments the
     /// append cookie to point to the start of writable data in this new page. Does not reset
-    /// pagebuffer or modify append cookie if the end of a non-circular log is reached.
-    fn reset_pagebuffer(&self, pagebuffer: &mut F::Page) {
+    /// pagebuffer or modify append cookie if the end of a non-circular log is reached. Returns
+    /// whether or not the pagebuffer was reset.
+    fn reset_pagebuffer(&self, pagebuffer: &mut F::Page) -> bool {
         // Make sure end of non-circular log has not been reached.
-        // TODO: return bool to signify if pagebuffer was actually reset or not?
         let mut append_cookie = self.append_cookie.get();
         if !self.circular && self.volume.len() - append_cookie < self.page_size {
-            return;
+            return false;
         }
 
         // Increment append cookie to point at start of next page.
@@ -437,6 +442,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
 
         // Note: this is the only place where the append cookie can cross page boundaries.
         self.append_cookie.set(append_cookie + PAGE_HEADER_SIZE);
+        true
     }
 
     /// Erases a single page from storage.
@@ -568,6 +574,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
     /// ReturnCodes used in append_done callback:
     ///     * SUCCESS: append succeeded.
     ///     * FAIL: write failed due to flash error.
+    ///     * ECANCEL: write failed due to reaching the end of a non-circular log.
     fn append(
         &self,
         buffer: &'static mut [u8],
@@ -587,7 +594,6 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
             return Err((ReturnCode::ESIZE, buffer));
         } else if !self.circular && self.append_cookie.get() + entry_size >= self.volume.len() {
             // End of non-circular log has been reached.
-            // TODO: need to ensure that append cookie NEVER goes beyond end of non-circular log.
             return Err((ReturnCode::FAIL, buffer));
         }
 
@@ -698,12 +704,23 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
                 match self.state.get() {
                     State::Write => {
                         // Reset pagebuffer and finish writing on the new page.
-                        // TODO: don't write if end of non-circular buffer reached.
-                        self.reset_pagebuffer(pagebuffer);
                         self.buffer
                             .take()
                             .map(move |buffer| {
-                                self.append_entry(buffer, self.length.get(), pagebuffer);
+                                if self.reset_pagebuffer(pagebuffer) {
+                                    self.append_entry(buffer, self.length.get(), pagebuffer);
+                                } else {
+                                    self.client
+                                        .map(move |client| {
+                                            client.append_done(
+                                                buffer,
+                                                0,
+                                                false,
+                                                ReturnCode::ECANCEL,
+                                            )
+                                        })
+                                        .unwrap();
+                                }
                             })
                             .unwrap();
                     }

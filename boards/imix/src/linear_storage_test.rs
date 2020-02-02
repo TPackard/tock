@@ -50,7 +50,7 @@ pub unsafe fn run_log_storage_linear(mux_alarm: &'static MuxAlarm<'static, Ast>)
     log_storage_test.run();
 }
 
-static TEST_OPS: [TestOp; 8] = [
+static TEST_OPS: [TestOp; 9] = [
     TestOp::Read,
     // Write to first page.
     TestOp::Write(8),
@@ -64,6 +64,8 @@ static TEST_OPS: [TestOp; 8] = [
     // Read back everything to verify and sync.
     TestOp::Read,
     TestOp::Sync,
+    // Write should still fail after sync.
+    TestOp::Write(303),
 ];
 
 // Buffer for reading from and writing to in the storage tests.
@@ -238,9 +240,7 @@ impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
                     if buffer[i] != length as u8 {
                         panic!(
                             "Read incorrect value {} at index {}, expected {}",
-                            buffer[i],
-                            i,
-                            length
+                            buffer[i], i, length
                         );
                     }
                 }
@@ -265,18 +265,19 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
         buffer: &'static mut [u8],
         length: StorageLen,
         records_lost: bool,
-        _error: ReturnCode,
+        error: ReturnCode,
     ) {
-        // TODO: check length/error.
         assert!(!records_lost);
-        debug!(
-            "Write succeeded on {} byte write, as expected",
-            length
-        );
+        match error {
+            ReturnCode::SUCCESS => {
+                debug!("Write succeeded on {} byte write, as expected", length);
 
-        self.buffer.replace(buffer);
-        self.op_index.increment();
-        self.wait();
+                self.buffer.replace(buffer);
+                self.op_index.increment();
+                self.wait();
+            }
+            error => panic!("WRITE FAILED IN CALLBACK: {:?}", error),
+        }
     }
 
     fn sync_done(&self, error: ReturnCode) {

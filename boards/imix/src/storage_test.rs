@@ -522,7 +522,7 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
                     if val != 0xFF {
                         // TODO: figure out what's going on...
                         for j in 0..2 {
-                            debug!("Read back failure (time #{}): {:?}", j, &TEST_LOG[i..i+8]);
+                            debug!("Read back failure (time #{}): {:?}", j, &TEST_LOG[i..i + 8]);
                         }
                         panic!(
                             "Log not properly erased, read {} at byte {}. SUMMARY: {:?}",
