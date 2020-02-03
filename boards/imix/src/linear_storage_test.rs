@@ -12,7 +12,6 @@
 /// ```
 /// and use the `USER` and `RESET` buttons to manually erase the log and reboot the imix,
 /// respectively.
-
 use capsules::log_storage;
 use capsules::storage_interface::{
     self, LogRead, LogReadClient, LogWrite, LogWriteClient, StorageCookie, StorageLen,

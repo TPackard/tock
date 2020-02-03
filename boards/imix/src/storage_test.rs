@@ -24,7 +24,6 @@
 /// ```
 /// and use the `USER` and `RESET` buttons to manually erase the log and reboot the imix,
 /// respectively.
-
 use capsules::log_storage;
 use capsules::storage_interface::{
     self, LogRead, LogReadClient, LogWrite, LogWriteClient, StorageCookie, StorageLen,
@@ -515,7 +514,8 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
                         self.storage.current_append_offset()
                     );
                 }
-                let expected_records_lost = self.write_val.get() > cookie_to_test_value(StorageCookie::Cookie(TEST_LOG.len()));
+                let expected_records_lost = self.write_val.get()
+                    > cookie_to_test_value(StorageCookie::Cookie(TEST_LOG.len()));
                 if records_lost && records_lost != expected_records_lost {
                     panic!("Append callback states records_lost = {}, expected {} (write #{}, offset {:?})!",
                            records_lost,
