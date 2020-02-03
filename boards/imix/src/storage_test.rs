@@ -1,3 +1,30 @@
+/// Tests the log storage interface in circular mode. For testing in linear mode, see
+/// linear_log_storage_test.rs.
+///
+/// This testing framework creates a circular log storage interface in flash and runs a series of
+/// operations upon it. The tests check to make sure that the correct values are read and written
+/// after each operation, that errors are properly detected and handled, and that the log generally
+/// behaves as expected. The tests perform both valid and invalid operations to fully test the log's
+/// behavior.
+///
+/// Pressing the `USER` button on the imix at any time during the test will erase the log and reset
+/// the test state. Pressing the `RESET` button will reboot the imix without erasing the log,
+/// allowing for testing logs across reboots.
+///
+/// In order to fully test the log, the tester should try a variety of erases and reboots to ensure
+/// that the log works correctly across these operations. The tester can also modify the testing
+/// operations and parameters defined below to test logs in different configurations. Different
+/// configurations should be tested in order to exercise the log under a greater number of
+/// scenarios (e.g. saturating/not saturating log pages with data, always/not always ending
+/// operations at page boundaries, etc.).
+///
+/// To run the test, add the following line to the imix boot sequence:
+/// ```
+///     storage_test::run_log_storage(mux_alarm);
+/// ```
+/// and use the `USER` and `RESET` buttons to manually erase the log and reboot the imix,
+/// respectively.
+
 use capsules::log_storage;
 use capsules::storage_interface::{
     self, LogRead, LogReadClient, LogWrite, LogWriteClient, StorageCookie, StorageLen,
@@ -470,25 +497,54 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
     fn append_done(
         &self,
         buffer: &'static mut [u8],
-        _length: StorageLen,
-        _records_lost: bool,
-        _error: ReturnCode,
+        length: StorageLen,
+        records_lost: bool,
+        error: ReturnCode,
     ) {
-        // TODO: check length, records_lost, error.
         self.buffer.replace(buffer);
         self.op_start.set(false);
 
-        // Stop writing after `ENTRIES_PER_WRITE` entries have been written.
-        if (self.write_val.get() + 1) % ENTRIES_PER_WRITE == 0 {
-            debug!(
-                "WRITE DONE: READ OFFSET: {:?} / WRITE OFFSET: {:?}",
-                self.storage.current_read_offset(),
-                self.storage.current_append_offset()
-            );
-            self.next_op();
+        match error {
+            ReturnCode::SUCCESS => {
+                if length != BUFFER_LEN {
+                    panic!(
+                        "Appended {} bytes, expected {} (write #{}, offset {:?})!",
+                        length,
+                        BUFFER_LEN,
+                        self.write_val.get(),
+                        self.storage.current_append_offset()
+                    );
+                }
+                let expected_records_lost = self.write_val.get() > cookie_to_test_value(StorageCookie::Cookie(TEST_LOG.len()));
+                if records_lost && records_lost != expected_records_lost {
+                    panic!("Append callback states records_lost = {}, expected {} (write #{}, offset {:?})!",
+                           records_lost,
+                           expected_records_lost,
+                           self.write_val.get(),
+                           self.storage.current_append_offset()
+                    );
+                }
+
+                // Stop writing after `ENTRIES_PER_WRITE` entries have been written.
+                if (self.write_val.get() + 1) % ENTRIES_PER_WRITE == 0 {
+                    debug!(
+                        "WRITE DONE: READ OFFSET: {:?} / WRITE OFFSET: {:?}",
+                        self.storage.current_read_offset(),
+                        self.storage.current_append_offset()
+                    );
+                    self.next_op();
+                }
+
+                self.write_val.set(self.write_val.get() + 1);
+            }
+            ReturnCode::FAIL => {
+                assert_eq!(length, 0);
+                assert!(!records_lost);
+                debug!("Append failed due to flash error, retrying...");
+            }
+            error => panic!("UNEXPECTED APPEND FAILURE: {:?}", error),
         }
 
-        self.write_val.set(self.write_val.get() + 1);
         self.wait();
     }
 

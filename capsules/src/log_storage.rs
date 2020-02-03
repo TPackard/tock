@@ -27,16 +27,8 @@ enum State {
     Erase,
 }
 
-/* TODO GENERAL:
- * Should functions that take a buffer also take a length or operate on entire buffer slice?
- *
- * Make sure log state is used and checked consistently. Make sure log state is reset to Idle int
- * the event of an error.
- *
- * No calls to `map`, should only use `map_or` or `map_or_else`.
- *
- * Remove debug statements.
- */
+// TODO: Remove debug statements.
+// TODO: no client callbacks within original function?
 
 pub struct LogStorage<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> {
     /// Underlying storage volume.
@@ -218,10 +210,13 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
             self.pagebuffer
                 .take()
                 .map(move |pagebuffer| {
-                    if last_page_len % self.page_size == 0 {
+                    // Determine if pagebuffer should be reset or copied from flash.
+                    let mut copy_pagebuffer = last_page_len % self.page_size != 0;
+                    if !copy_pagebuffer {
                         // Last page full, reset pagebuffer for next page.
-                        self.reset_pagebuffer(pagebuffer);
-                    } else {
+                        copy_pagebuffer = !self.reset_pagebuffer(pagebuffer);
+                    }
+                    if copy_pagebuffer {
                         // Copy last page into pagebuffer.
                         for i in 0..self.page_size {
                             pagebuffer.as_mut()[i] =
@@ -423,9 +418,9 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
     /// pagebuffer or modify append cookie if the end of a non-circular log is reached. Returns
     /// whether or not the pagebuffer was reset.
     fn reset_pagebuffer(&self, pagebuffer: &mut F::Page) -> bool {
-        // Make sure end of non-circular log has not been reached.
+        // Make sure this is not the last page of a non-circular buffer.
         let mut append_cookie = self.append_cookie.get();
-        if !self.circular && self.volume.len() - append_cookie < self.page_size {
+        if !self.circular && append_cookie + self.page_size > self.volume.len() {
             return false;
         }
 
@@ -504,7 +499,6 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogRead for LogS
         // Try reading next entry.
         match self.read_entry(buffer, length) {
             Ok(bytes_read) => {
-                // TODO: no client callbacks within original function?
                 self.client
                     .map(move |client| {
                         client.read_done(buffer, bytes_read, ReturnCode::SUCCESS);
@@ -592,7 +586,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
         } else if entry_size + PAGE_HEADER_SIZE > self.page_size {
             // Entry too big, won't fit within a single page.
             return Err((ReturnCode::ESIZE, buffer));
-        } else if !self.circular && self.append_cookie.get() + entry_size >= self.volume.len() {
+        } else if !self.circular && self.append_cookie.get() + entry_size > self.volume.len() {
             // End of non-circular log has been reached.
             return Err((ReturnCode::FAIL, buffer));
         }
@@ -710,6 +704,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
                                 if self.reset_pagebuffer(pagebuffer) {
                                     self.append_entry(buffer, self.length.get(), pagebuffer);
                                 } else {
+                                    self.state.set(State::Idle);
                                     self.client
                                         .map(move |client| {
                                             client.append_done(
@@ -793,10 +788,12 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
                     }
                 }
             }
-            flash::Error::FlashError => self
-                .client
-                .map(move |client| client.erase_done(ReturnCode::FAIL))
-                .unwrap(),
+            flash::Error::FlashError => {
+                self.state.set(State::Idle);
+                self.client
+                    .map(move |client| client.erase_done(ReturnCode::FAIL))
+                    .unwrap();
+            }
         }
     }
 }

@@ -1,3 +1,18 @@
+/// Tests the log storage interface in linear mode. For testing in circular mode, see
+/// log_storage_test.rs.
+///
+/// The testing framework creates a non-circular log storage interface in flash and performs a
+/// series of writes and syncs to ensure that the non-circular log properly denies overly-large
+/// writes once it is full. For testing all of the general capabilities of the log storage
+/// interface, see storage_test.rs.
+///
+/// To run the test, add the following line to the imix boot sequence:
+/// ```
+///     linear_storage_test::run_log_storage_linear(mux_alarm);
+/// ```
+/// and use the `USER` and `RESET` buttons to manually erase the log and reboot the imix,
+/// respectively.
+
 use capsules::log_storage;
 use capsules::storage_interface::{
     self, LogRead, LogReadClient, LogWrite, LogWriteClient, StorageCookie, StorageLen,
@@ -56,16 +71,16 @@ static TEST_OPS: [TestOp; 9] = [
     TestOp::Write(8),
     TestOp::Write(300),
     // Write to next page, too large to fit on first.
-    TestOp::Write(301),
+    TestOp::Write(304),
     // Write should fail, not enough space remaining.
-    TestOp::Write(302),
+    TestOp::Write(306),
     // Write should succeed, enough space for a smaller entry.
     TestOp::Write(9),
     // Read back everything to verify and sync.
     TestOp::Read,
     TestOp::Sync,
     // Write should still fail after sync.
-    TestOp::Write(303),
+    TestOp::Write(308),
 ];
 
 // Buffer for reading from and writing to in the storage tests.
@@ -245,6 +260,7 @@ impl<A: Alarm<'static>> LogReadClient for LogStorageTest<A> {
                     }
                 }
 
+                debug!("Successful read of size {}", length);
                 self.buffer.replace(buffer);
                 self.wait();
             }
