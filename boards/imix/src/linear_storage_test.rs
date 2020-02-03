@@ -1,17 +1,18 @@
-/// Tests the log storage interface in linear mode. For testing in circular mode, see
-/// log_storage_test.rs.
-///
-/// The testing framework creates a non-circular log storage interface in flash and performs a
-/// series of writes and syncs to ensure that the non-circular log properly denies overly-large
-/// writes once it is full. For testing all of the general capabilities of the log storage
-/// interface, see storage_test.rs.
-///
-/// To run the test, add the following line to the imix boot sequence:
-/// ```
-///     linear_storage_test::run_log_storage_linear(mux_alarm);
-/// ```
-/// and use the `USER` and `RESET` buttons to manually erase the log and reboot the imix,
-/// respectively.
+//! Tests the log storage interface in linear mode. For testing in circular mode, see
+//! log_storage_test.rs.
+//!
+//! The testing framework creates a non-circular log storage interface in flash and performs a
+//! series of writes and syncs to ensure that the non-circular log properly denies overly-large
+//! writes once it is full. For testing all of the general capabilities of the log storage
+//! interface, see storage_test.rs.
+//!
+//! To run the test, add the following line to the imix boot sequence:
+//! ```
+//!     linear_storage_test::run_log_storage_linear(mux_alarm);
+//! ```
+//! and use the `USER` and `RESET` buttons to manually erase the log and reboot the imix,
+//! respectively.
+
 use capsules::log_storage;
 use capsules::storage_interface::{
     self, LogRead, LogReadClient, LogWrite, LogWriteClient, StorageCookie, StorageLen,

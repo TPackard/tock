@@ -1,29 +1,30 @@
-/// Tests the log storage interface in circular mode. For testing in linear mode, see
-/// linear_log_storage_test.rs.
-///
-/// This testing framework creates a circular log storage interface in flash and runs a series of
-/// operations upon it. The tests check to make sure that the correct values are read and written
-/// after each operation, that errors are properly detected and handled, and that the log generally
-/// behaves as expected. The tests perform both valid and invalid operations to fully test the log's
-/// behavior.
-///
-/// Pressing the `USER` button on the imix at any time during the test will erase the log and reset
-/// the test state. Pressing the `RESET` button will reboot the imix without erasing the log,
-/// allowing for testing logs across reboots.
-///
-/// In order to fully test the log, the tester should try a variety of erases and reboots to ensure
-/// that the log works correctly across these operations. The tester can also modify the testing
-/// operations and parameters defined below to test logs in different configurations. Different
-/// configurations should be tested in order to exercise the log under a greater number of
-/// scenarios (e.g. saturating/not saturating log pages with data, always/not always ending
-/// operations at page boundaries, etc.).
-///
-/// To run the test, add the following line to the imix boot sequence:
-/// ```
-///     storage_test::run_log_storage(mux_alarm);
-/// ```
-/// and use the `USER` and `RESET` buttons to manually erase the log and reboot the imix,
-/// respectively.
+//! Tests the log storage interface in circular mode. For testing in linear mode, see
+//! linear_log_storage_test.rs.
+//!
+//! This testing framework creates a circular log storage interface in flash and runs a series of
+//! operations upon it. The tests check to make sure that the correct values are read and written
+//! after each operation, that errors are properly detected and handled, and that the log generally
+//! behaves as expected. The tests perform both valid and invalid operations to fully test the log's
+//! behavior.
+//!
+//! Pressing the `USER` button on the imix at any time during the test will erase the log and reset
+//! the test state. Pressing the `RESET` button will reboot the imix without erasing the log,
+//! allowing for testing logs across reboots.
+//!
+//! In order to fully test the log, the tester should try a variety of erases and reboots to ensure
+//! that the log works correctly across these operations. The tester can also modify the testing
+//! operations and parameters defined below to test logs in different configurations. Different
+//! configurations should be tested in order to exercise the log under a greater number of
+//! scenarios (e.g. saturating/not saturating log pages with data, always/not always ending
+//! operations at page boundaries, etc.).
+//!
+//! To run the test, add the following line to the imix boot sequence:
+//! ```
+//!     storage_test::run_log_storage(mux_alarm);
+//! ```
+//! and use the `USER` and `RESET` buttons to manually erase the log and reboot the imix,
+//! respectively.
+
 use capsules::log_storage;
 use capsules::storage_interface::{
     self, LogRead, LogReadClient, LogWrite, LogWriteClient, StorageCookie, StorageLen,
@@ -574,15 +575,10 @@ impl<A: Alarm<'static>> LogWriteClient for LogStorageTest<A> {
 
                 // Make sure that flash has been erased.
                 for i in 0..TEST_LOG.len() {
-                    let val = TEST_LOG[i];
-                    if val != 0xFF {
-                        // TODO: figure out what's going on...
-                        for j in 0..2 {
-                            debug!("Read back failure (time #{}): {:?}", j, &TEST_LOG[i..i + 8]);
-                        }
+                    if TEST_LOG[i] != 0xFF {
                         panic!(
                             "Log not properly erased, read {} at byte {}. SUMMARY: {:?}",
-                            val,
+                            TEST_LOG[i],
                             i,
                             &TEST_LOG[i..i + 8]
                         );

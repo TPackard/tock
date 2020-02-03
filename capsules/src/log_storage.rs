@@ -6,7 +6,6 @@ use core::convert::TryFrom;
 use core::mem::size_of;
 use core::unreachable;
 use kernel::common::cells::{OptionalCell, TakeCell};
-use kernel::debug;
 use kernel::hil::flash::{self, Flash};
 use kernel::ReturnCode;
 
@@ -27,7 +26,6 @@ enum State {
     Erase,
 }
 
-// TODO: Remove debug statements.
 // TODO: no client callbacks within original function?
 
 pub struct LogStorage<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> {
@@ -406,13 +404,6 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
         }
 
         // Sync page to flash.
-        let page = pagebuffer.as_mut();
-        debug!(
-            "Syncing: {:?}...{:?} ({})",
-            &page[0..16],
-            &page[496..512],
-            page_number
-        );
         self.driver.write_page(page_number, pagebuffer)
     }
 
@@ -448,8 +439,6 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
         // Uses oldest cookie to keep track of which page to erase. Thus, the oldest pages will be
         // erased first and the log will remain in a valid state even if it fails to be erased
         // completely.
-        // TODO: remove.
-        debug!("E{}", self.page_number(self.oldest_cookie.get()));
         self.driver
             .erase_page(self.page_number(self.oldest_cookie.get()))
     }
@@ -688,17 +677,6 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
     fn write_complete(&self, pagebuffer: &'static mut F::Page, error: flash::Error) {
         match error {
             flash::Error::CommandComplete => {
-                // Debug print, remove this.
-                let offset = self.append_cookie.get() - 1;
-                let offset = offset - offset % self.page_size;
-                let offset = offset % self.volume.len();
-                debug!(
-                    "Synced:  {:?}...{:?} ({})",
-                    &self.volume[offset..offset + 16],
-                    &self.volume[offset + 496..offset + 512],
-                    offset,
-                );
-
                 match self.state.get() {
                     State::Write => {
                         // Reset pagebuffer and finish writing on the new page.
