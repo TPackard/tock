@@ -52,7 +52,7 @@ pub unsafe fn run_log_storage(
 ) {
     // Set up flash controller.
     flashcalw::FLASH_CONTROLLER.configure();
-    pub static mut PAGEBUFFER: flashcalw::Sam4lPage = flashcalw::Sam4lPage::new();
+    static mut PAGEBUFFER: flashcalw::Sam4lPage = flashcalw::Sam4lPage::new();
 
     // Create actual log storage abstraction on top of flash.
     let log_storage = static_init!(

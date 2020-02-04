@@ -1,3 +1,50 @@
+//! Implements a log storage abstraction for storing persistent data in flash. Data entries can be
+//! appended to the end of a log and read back in-order. Logs may be linear (denying writes when
+//! full) or circular (overwriting the oldest entries with the newest entries when the underlying
+//! flash volume is full). The storage volumes that logs operate upon are statically allocated at
+//! compile time and cannot be dynamically created at runtime.
+//!
+//! Logs support the following basic operations:
+//!     * Read:     Read back previously written entries in whole. Entries are read sequentially,
+//!                 from oldest to newest.
+//!     * Seek:     Seek to different entries to begin reads starting from a different entry. Valid
+//!                 locations to seek to can be retrieved via the
+//!                 `current_read_offset` and `current_append_offset` functions.
+//!     * Append:   Append new data entries onto the end of a log.
+//!     * Sync:     Sync a log to flash to ensure that all changes are persistent.
+//!     * Erase:    Erase a log in its entirety, clearing the underlying flash volume.
+//! See the documentation for each individual function for more detail on how they operate.
+//!
+//! Usage
+//! -----
+//!
+//! ```
+//!     storage_volume!(VOLUME, 2);
+//!     static mut PAGEBUFFER: sam4l::flashcalw::Sam4lPage = sam4l::flashcalw::Sam4lPage::new();
+//!
+//!     let dynamic_deferred_call_clients =
+//!         static_init!([DynamicDeferredCallClientState; 2], Default::default());
+//!     let dynamic_deferred_caller = static_init!(
+//!         DynamicDeferredCall,
+//!         DynamicDeferredCall::new(dynamic_deferred_call_clients)
+//!     );
+//!
+//!     let log_storage = static_init!(
+//!         capsules::log_storage::LogStorage,
+//!         capsules::log_storage::LogStorage::new(
+//!             &VOLUME,
+//!             &mut sam4l::flashcalw::FLASH_CONTROLLER,
+//!             &mut PAGEBUFFER,
+//!             dynamic_deferred_caller,
+//!             true
+//!         )
+//!     );
+//!     kernel::hil::flash::HasClient::set_client(&sam4l::flashcalw::FLASH_CONTROLLER, log_storage);
+//!     log_storage.initialize_callback_handle(dynamic_deferred_caller.register(log_storage).expect("no deferred call slot available for log storage"));
+//!
+//!     storage_interface::HasClient::set_client(log_storage, log_storage_client);
+//! ```
+
 use crate::storage_interface::{
     HasClient, LogRead, LogReadClient, LogWrite, LogWriteClient, StorageCookie, StorageLen,
 };
@@ -26,7 +73,7 @@ enum State {
     Idle,
     Read,
     Seek,
-    Write,
+    Append,
     Sync,
     Erase,
 }
@@ -480,7 +527,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
                     })
                     .unwrap(),
                 State::Seek => client.seek_done(self.error.get()),
-                State::Write => self
+                State::Append => self
                     .buffer
                     .take()
                     .map(move |buffer| {
@@ -640,7 +687,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
         // Perform append.
         match self.pagebuffer.take() {
             Some(pagebuffer) => {
-                self.state.set(State::Write);
+                self.state.set(State::Append);
                 self.length.set(length);
 
                 // Check if previous page needs to be flushed and new entry will fit within space
@@ -732,7 +779,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
         match error {
             flash::Error::CommandComplete => {
                 match self.state.get() {
-                    State::Write => {
+                    State::Append => {
                         // Reset pagebuffer and finish writing on the new page.
                         if self.reset_pagebuffer(pagebuffer) {
                             self.buffer
@@ -766,7 +813,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
                 // Make client callback with FAIL return code.
                 self.pagebuffer.replace(pagebuffer);
                 match self.state.get() {
-                    State::Write => {
+                    State::Append => {
                         self.length.set(0);
                         self.records_lost.set(false);
                         self.error.set(ReturnCode::FAIL);
