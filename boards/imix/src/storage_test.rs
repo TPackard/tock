@@ -20,7 +20,7 @@
 //!
 //! To run the test, add the following line to the imix boot sequence:
 //! ```
-//!     storage_test::run_log_storage(mux_alarm);
+//!     storage_test::run_log_storage(mux_alarm, dynamic_deferred_caller);
 //! ```
 //! and use the `USER` and `RESET` buttons to manually erase the log and reboot the imix,
 //! respectively.
@@ -32,6 +32,7 @@ use capsules::storage_interface::{
 use capsules::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use core::cell::Cell;
 use kernel::common::cells::{NumericCellExt, TakeCell};
+use kernel::common::dynamic_deferred_call::DynamicDeferredCall;
 use kernel::debug;
 use kernel::hil::flash;
 use kernel::hil::gpio::{self, Interrupt};
@@ -45,7 +46,10 @@ use sam4l::flashcalw;
 // Allocate 2kiB volume for log storage.
 storage_volume!(TEST_LOG, 2);
 
-pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
+pub unsafe fn run_log_storage(
+    mux_alarm: &'static MuxAlarm<'static, Ast>,
+    deferred_caller: &'static DynamicDeferredCall,
+) {
     // Set up flash controller.
     flashcalw::FLASH_CONTROLLER.configure();
     pub static mut PAGEBUFFER: flashcalw::Sam4lPage = flashcalw::Sam4lPage::new();
@@ -57,10 +61,12 @@ pub unsafe fn run_log_storage(mux_alarm: &'static MuxAlarm<'static, Ast>) {
             &TEST_LOG,
             &mut flashcalw::FLASH_CONTROLLER,
             &mut PAGEBUFFER,
+            deferred_caller,
             true
         )
     );
     flash::HasClient::set_client(&flashcalw::FLASH_CONTROLLER, log_storage);
+    log_storage.initialize_callback_handle(deferred_caller.register(log_storage).expect("no deferred call slot available for log storage"));
 
     // Create and run test for log storage.
     let log_storage_test = static_init!(

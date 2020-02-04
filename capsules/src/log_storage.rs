@@ -6,6 +6,9 @@ use core::convert::TryFrom;
 use core::mem::size_of;
 use core::unreachable;
 use kernel::common::cells::{OptionalCell, TakeCell};
+use kernel::common::dynamic_deferred_call::{
+    DeferredCallHandle, DynamicDeferredCall, DynamicDeferredCallClient,
+};
 use kernel::hil::flash::{self, Flash};
 use kernel::ReturnCode;
 
@@ -21,12 +24,12 @@ const PAD_BYTE: u8 = 0xFF;
 #[derive(Clone, Copy, PartialEq)]
 enum State {
     Idle,
+    Read,
+    Seek,
     Write,
     Sync,
     Erase,
 }
-
-// TODO: no client callbacks within original function?
 
 pub struct LogStorage<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> {
     /// Underlying storage volume.
@@ -53,10 +56,20 @@ pub struct LogStorage<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient>
     /// Oldest cookie still in log.
     oldest_cookie: Cell<usize>,
 
+    /// Deferred caller for deferring client callbacks.
+    deferred_caller: &'a DynamicDeferredCall,
+    /// Handle for deferred caller.
+    handle: OptionalCell<DeferredCallHandle>,
+
+    // Note: for saving state across stack ripping.
     /// Client-provided buffer to write from.
     buffer: TakeCell<'static, [u8]>,
-    /// Length of data to write from buffer.
+    /// Length of data within buffer.
     length: Cell<StorageLen>,
+    /// Whether or not records were lost in the previous append.
+    records_lost: Cell<bool>,
+    /// Error returned by previously executed operation (or SUCCESS).
+    error: Cell<ReturnCode>,
 }
 
 impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F, C> {
@@ -64,6 +77,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
         volume: &'static [u8],
         driver: &'a F,
         pagebuffer: &'static mut F::Page,
+        deferred_caller: &'a DynamicDeferredCall,
         circular: bool,
     ) -> LogStorage<'a, F, C> {
         let page_size = pagebuffer.as_mut().len();
@@ -81,8 +95,12 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
             read_cookie: Cell::new(PAGE_HEADER_SIZE),
             append_cookie: Cell::new(PAGE_HEADER_SIZE),
             oldest_cookie: Cell::new(PAGE_HEADER_SIZE),
+            deferred_caller,
+            handle: OptionalCell::empty(),
             buffer: TakeCell::empty(),
             length: Cell::new(0),
+            records_lost: Cell::new(false),
+            error: Cell::new(ReturnCode::ENODEVICE),
         };
 
         log_storage.reconstruct();
@@ -92,11 +110,6 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
     /// Returns the page number of the page containing a cookie.
     fn page_number(&self, cookie: usize) -> usize {
         (self.volume.as_ptr() as usize + cookie % self.volume.len()) / self.page_size
-    }
-
-    /// Whether or not records may have been previously lost.
-    fn records_lost(&self) -> bool {
-        self.oldest_cookie.get() != PAGE_HEADER_SIZE
     }
 
     /// Gets the buffer containing the given cookie.
@@ -357,12 +370,10 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
 
         // Replace pagebuffer and callback client.
         self.pagebuffer.replace(pagebuffer);
-        self.state.set(State::Idle);
-        self.client
-            .map(move |client| {
-                client.append_done(buffer, length, self.records_lost(), ReturnCode::SUCCESS)
-            })
-            .unwrap();
+        self.buffer.replace(buffer);
+        self.records_lost.set(self.oldest_cookie.get() != PAGE_HEADER_SIZE);
+        self.error.set(ReturnCode::SUCCESS);
+        self.client_callback();
     }
 
     /// Flushes the pagebuffer to flash. Log state must be non-idle before calling, else data races
@@ -442,6 +453,51 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogStorage<'a, F
         self.driver
             .erase_page(self.page_number(self.oldest_cookie.get()))
     }
+
+    /// Initializes a callback handle for deferred callbacks.
+    pub fn initialize_callback_handle(&self, handle: DeferredCallHandle) {
+        self.handle.replace(handle);
+    }
+
+    /// Defers a client callback until later.
+    fn deferred_client_callback(&self) {
+        self.handle.map(|handle| self.deferred_caller.set(*handle));
+    }
+
+    /// Resets the log state to idle and makes a client callback. The values returned by via the
+    /// callback must be saved within the log's state before making a callback.
+    fn client_callback(&self) {
+        let state = self.state.get();
+        self.state.set(State::Idle);
+
+        self.client
+            .map(move |client| match state {
+                State::Read => self
+                    .buffer
+                    .take()
+                    .map(move |buffer| {
+                        client.read_done(buffer, self.length.get(), self.error.get());
+                    })
+                    .unwrap(),
+                State::Seek => client.seek_done(self.error.get()),
+                State::Write => self
+                    .buffer
+                    .take()
+                    .map(move |buffer| {
+                        client.append_done(
+                            buffer,
+                            self.length.get(),
+                            self.records_lost.get(),
+                            self.error.get(),
+                        );
+                    })
+                    .unwrap(),
+                State::Sync => client.sync_done(self.error.get()),
+                State::Erase => client.erase_done(self.error.get()),
+                State::Idle => panic!("Cannot make client callback when idle!"),
+            })
+            .unwrap();
+    }
 }
 
 impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> HasClient<'a, C>
@@ -491,11 +547,11 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogRead for LogS
         // Try reading next entry.
         match self.read_entry(buffer, length) {
             Ok(bytes_read) => {
-                self.client
-                    .map(move |client| {
-                        client.read_done(buffer, bytes_read, ReturnCode::SUCCESS);
-                    })
-                    .unwrap();
+                self.state.set(State::Read);
+                self.buffer.replace(buffer);
+                self.length.set(bytes_read);
+                self.error.set(ReturnCode::SUCCESS);
+                self.deferred_client_callback();
                 Ok(())
             }
             Err(return_code) => Err((return_code, buffer)),
@@ -530,13 +586,11 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogRead for LogS
 
         // Make client callback on success.
         if status == ReturnCode::SUCCESS {
-            self.client.map_or(ReturnCode::ERESERVE, move |client| {
-                client.seek_done(status);
-                ReturnCode::SUCCESS
-            })
-        } else {
-            status
+            self.state.set(State::Seek);
+            self.error.set(ReturnCode::SUCCESS);
+            self.deferred_client_callback();
         }
+        status
     }
 
     /// Get approximate log capacity in bytes.
@@ -586,6 +640,9 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
         // Perform append.
         match self.pagebuffer.take() {
             Some(pagebuffer) => {
+                self.state.set(State::Write);
+                self.length.set(length);
+
                 // Check if previous page needs to be flushed and new entry will fit within space
                 // remaining in current page.
                 let append_cookie = self.append_cookie.get();
@@ -597,10 +654,7 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> LogWrite for Log
                     Ok(())
                 } else {
                     // Need to sync pagebuffer first, then append to new page.
-                    self.state.set(State::Write);
                     self.buffer.replace(buffer);
-                    self.length.set(length);
-
                     let (return_code, pagebuffer) = self.flush_pagebuffer(pagebuffer);
                     if return_code == ReturnCode::SUCCESS {
                         Ok(())
@@ -680,26 +734,20 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
                 match self.state.get() {
                     State::Write => {
                         // Reset pagebuffer and finish writing on the new page.
-                        self.buffer
-                            .take()
-                            .map(move |buffer| {
-                                if self.reset_pagebuffer(pagebuffer) {
+                        if self.reset_pagebuffer(pagebuffer) {
+                            self.buffer
+                                .take()
+                                .map(move |buffer| {
                                     self.append_entry(buffer, self.length.get(), pagebuffer);
-                                } else {
-                                    self.state.set(State::Idle);
-                                    self.client
-                                        .map(move |client| {
-                                            client.append_done(
-                                                buffer,
-                                                0,
-                                                false,
-                                                ReturnCode::ECANCEL,
-                                            )
-                                        })
-                                        .unwrap();
-                                }
-                            })
-                            .unwrap();
+                                })
+                                .unwrap();
+                        } else {
+                            self.pagebuffer.replace(pagebuffer);
+                            self.length.set(0);
+                            self.records_lost.set(false);
+                            self.error.set(ReturnCode::ECANCEL);
+                            self.client_callback();
+                        }
                     }
                     State::Sync => {
                         // Reset pagebuffer if synced page was full.
@@ -708,10 +756,8 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
                         }
 
                         self.pagebuffer.replace(pagebuffer);
-                        self.state.set(State::Idle);
-                        self.client
-                            .map(move |client| client.sync_done(ReturnCode::SUCCESS))
-                            .unwrap();
+                        self.error.set(ReturnCode::SUCCESS);
+                        self.client_callback();
                     }
                     _ => unreachable!(),
                 }
@@ -719,23 +765,17 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
             flash::Error::FlashError => {
                 // Make client callback with FAIL return code.
                 self.pagebuffer.replace(pagebuffer);
-                self.state.set(State::Idle);
                 match self.state.get() {
-                    State::Write => self
-                        .buffer
-                        .take()
-                        .map(move |buffer| {
-                            self.client
-                                .map(move |client| {
-                                    client.append_done(buffer, 0, false, ReturnCode::FAIL)
-                                })
-                                .unwrap();
-                        })
-                        .unwrap(),
-                    State::Sync => self
-                        .client
-                        .map(move |client| client.sync_done(ReturnCode::FAIL))
-                        .unwrap(),
+                    State::Write => {
+                        self.length.set(0);
+                        self.records_lost.set(false);
+                        self.error.set(ReturnCode::FAIL);
+                        self.client_callback();
+                    }
+                    State::Sync => {
+                        self.error.set(ReturnCode::FAIL);
+                        self.client_callback();
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -748,12 +788,9 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
                 let oldest_cookie = self.oldest_cookie.get();
                 if oldest_cookie >= self.append_cookie.get() - self.page_size {
                     // Erased all pages. Reset state and callback client.
-                    self.state.set(State::Idle);
                     self.reset();
-
-                    self.client
-                        .map(move |client| client.erase_done(ReturnCode::SUCCESS))
-                        .unwrap();
+                    self.error.set(ReturnCode::SUCCESS);
+                    self.client_callback();
                 } else {
                     // Not done, erase next page.
                     self.oldest_cookie.set(oldest_cookie + self.page_size);
@@ -761,21 +798,25 @@ impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> flash::Client<F>
 
                     // Abort and alert client if flash driver is busy.
                     if status == ReturnCode::EBUSY {
-                        self.state.set(State::Idle);
                         self.read_cookie
                             .set(core::cmp::max(self.read_cookie.get(), oldest_cookie));
-                        self.client
-                            .map(move |client| client.erase_done(ReturnCode::EBUSY))
-                            .unwrap();
+                        self.error.set(ReturnCode::EBUSY);
+                        self.client_callback();
                     }
                 }
             }
             flash::Error::FlashError => {
-                self.state.set(State::Idle);
-                self.client
-                    .map(move |client| client.erase_done(ReturnCode::FAIL))
-                    .unwrap();
+                self.error.set(ReturnCode::FAIL);
+                self.client_callback();
             }
         }
+    }
+}
+
+impl<'a, F: Flash + 'static, C: LogReadClient + LogWriteClient> DynamicDeferredCallClient
+    for LogStorage<'a, F, C>
+{
+    fn call(&self, _handle: DeferredCallHandle) {
+        self.client_callback();
     }
 }
