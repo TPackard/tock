@@ -1,16 +1,15 @@
 [package]
-name = "nrf5x"
+name = "nrf53"
 version = "0.1.0"
 authors = ["Tock Project Developers <tock-dev@googlegroups.com>"]
 edition = "2018"
 
 [dependencies]
+cortexm33 = { path = "../../arch/cortex-m33" }
 kernel = { path = "../../kernel" }
+tock_rt0 = { path = "../../libraries/tock-rt0" }
 enum_primitive = { path = "../../libraries/enum_primitive" }
 
-[features]
-default = []
-
-nrf51 = []
-nrf52 = []
-nrf53 = []
+[dependencies.nrf5x]
+path = "../nrf5x"
+features = ["nrf53"]
