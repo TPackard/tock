@@ -219,16 +219,20 @@ register_bitfields! [u32,
 ];
 
 // Clock registers
+#[allow(dead_code)]
 const CLOCK_BASE_NONSECURE: StaticRef<ClockRegisters> =
     unsafe { StaticRef::new(0x40005000 as *const ClockRegisters) };
 const CLOCK_BASE_SECURE: StaticRef<ClockRegisters> =
     unsafe { StaticRef::new(0x50005000 as *const ClockRegisters) };
+#[allow(dead_code)]
 const CLOCK_BASE_NETWORK: StaticRef<ClockRegisters> =
     unsafe { StaticRef::new(0x41005000 as *const ClockRegisters) };
 
 // Oscillator registers
+#[allow(dead_code)]
 const OSCILLATORS_BASE_NONSECURE: StaticRef<OscillatorsRegisters> =
     unsafe { StaticRef::new(0x40004000 as *const OscillatorsRegisters) };
+#[allow(dead_code)]
 const OSCILLATORS_BASE_SECURE: StaticRef<OscillatorsRegisters> =
     unsafe { StaticRef::new(0x50004000 as *const OscillatorsRegisters) };
 
@@ -390,8 +394,8 @@ impl Clock {
     /// Set high frequency clock source
     pub fn high_set_source(&self, clock_source: HighClockSource) {
         let regs = &*self.registers;
-        regs.hfclkstat
-            .write(HfClkStat::SRC.val(clock_source as u32));
+        regs.hfclksrc
+            .write(HfClkSrc::SRC.val(clock_source as u32));
     }
 
     /// Configure high frequency clock frequency
@@ -473,8 +477,8 @@ impl Clock {
     /// Set 192 MHz high frequency clock source
     pub fn high_192m_set_source(&self, clock_source: HighClockSource) {
         let regs = &*self.registers;
-        regs.hfclk192mstat
-            .write(HfClkStat::SRC.val(clock_source as u32));
+        regs.hfclk192msrc
+            .write(HfClkSrc::SRC.val(clock_source as u32));
     }
 
     /// Configure 192 MHz high frequency clock frequency

@@ -61,7 +61,7 @@ register_structs! {
         (0x400 => resetreas: ReadWrite<u32, AppResetReason::Register>),
         (0x404 => _reserved8),
         /// Main supply status
-        (0x428 => maingregstatus: ReadOnly<u32, MainSupply::Register>),
+        (0x428 => mainregstatus: ReadOnly<u32, MainSupply::Register>),
         (0x42C => _reserved9),
         /// System OFF register
         (0x500 => systemoff: WriteOnly<u32, Task::Register>),
@@ -329,18 +329,14 @@ pub trait PowerClient {
 
 impl<'a> Power<'a> {
     const fn new() -> Self {
-        let power = Power {
+        Power {
             registers: POWER_BASE_SECURE,
             client: OptionalCell::empty(),
-        };
-
-        power.disable_all_interrupts();
-        power
+        }
     }
 
     pub fn set_client(&self, client: &'a dyn PowerClient) {
         self.client.set(client);
-        self.enable_interrupts();
     }
 
     pub fn handle_interrupt(&self) {

@@ -2,7 +2,7 @@
 
 use kernel::common::cells::OptionalCell;
 use kernel::common::registers::{
-    register_bitfields, register_structs, ReadOnly, ReadWrite, WriteOnly,
+    register_bitfields, register_structs, ReadOnly, ReadWrite,
 };
 use kernel::common::StaticRef;
 
