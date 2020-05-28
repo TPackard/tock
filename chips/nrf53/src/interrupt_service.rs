@@ -1,5 +1,6 @@
+use crate::gpio;
 use crate::power;
-use nrf5x::peripheral_interrupts;
+use crate::peripheral_interrupts;
 
 /// Interface for handling interrupts on a hardware chip.
 ///
@@ -49,11 +50,11 @@ pub trait InterruptService {
 }
 
 pub struct Nrf53InterruptService {
-    gpio_port: &'static nrf5x::gpio::Port,
+    gpio_port: &'static gpio::Port,
 }
 
 impl Nrf53InterruptService {
-    pub unsafe fn new(gpio_port: &'static nrf5x::gpio::Port) -> Nrf53InterruptService {
+    pub unsafe fn new(gpio_port: &'static gpio::Port) -> Nrf53InterruptService {
         Nrf53InterruptService { gpio_port }
     }
 }
@@ -61,12 +62,10 @@ impl Nrf53InterruptService {
 impl InterruptService for Nrf53InterruptService {
     unsafe fn service_interrupt(&self, interrupt: u32) -> bool {
         match interrupt {
-            peripheral_interrupts::GPIOTE => self.gpio_port.handle_interrupt(),
-            peripheral_interrupts::POWER_CLOCK => power::POWER.handle_interrupt(),
-            peripheral_interrupts::RNG => nrf5x::trng::TRNG.handle_interrupt(),
-            peripheral_interrupts::TIMER0 => nrf5x::timer::TIMER0.handle_interrupt(),
-            peripheral_interrupts::TIMER1 => nrf5x::timer::ALARM1.handle_interrupt(),
-            peripheral_interrupts::TIMER2 => nrf5x::timer::TIMER2.handle_interrupt(),
+            // TODO: should these do the same thing?
+            peripheral_interrupts::GPIOTE0 => self.gpio_port.handle_interrupt(),
+            peripheral_interrupts::GPIOTE1 => self.gpio_port.handle_interrupt(),
+            peripheral_interrupts::POWER => power::POWER.handle_interrupt(),
             _ => return false,
         }
         true

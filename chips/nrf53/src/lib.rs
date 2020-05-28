@@ -5,6 +5,7 @@
 
 pub mod chip;
 pub mod clock;
+pub mod crt1;
 mod deferred_call_tasks;
 pub mod gpio;
 pub mod interrupt_service;
@@ -13,4 +14,4 @@ pub mod peripheral_interrupts;
 pub mod power;
 pub mod usbreg;
 
-pub use nrf5x::pinmux;
+pub use crt1::init;

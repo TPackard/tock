@@ -106,7 +106,8 @@ pub unsafe extern "C" fn generic_isr() {
     // Find the ISR number (`index`) by looking at the low byte of the IPSR
     // registers.
     mrs r0, IPSR       // r0 = Interrupt Program Status Register (IPSR)
-    and r0, #0x1FF     // r0 = r0 & 0x1FF
+    movt r2, #0x1FF
+    and r0, r2         // r0 = r0 & 0x1FF
     sub r0, #16        // ISRs start at 16, so subtract 16 to get zero-indexed.
 
     // Now disable that interrupt in the NVIC.

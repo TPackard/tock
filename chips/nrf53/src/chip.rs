@@ -1,32 +1,33 @@
 use crate::deferred_call_tasks::DeferredCallTask;
-use crate::interrupt_service::InterruptService;
+use crate::gpio;
+use crate::interrupt_service::{InterruptService, Nrf53InterruptService};
 use crate::nvmc;
 use core::fmt::Write;
 use cortexm33::{self, nvic};
 use kernel::common::deferred_call;
 use kernel::debug;
 
-pub struct NRF53<I: InterruptService> {
+pub struct NRF53 {
     mpu: cortexm33::mpu::MPU,
     userspace_kernel_boundary: cortexm33::syscall::SysCall,
     systick: cortexm33::systick::SysTick,
-    interrupt_service: I,
+    interrupt_service: Nrf53InterruptService,
 }
 
-impl<I: InterruptService> NRF53<I> {
-    pub unsafe fn new(interrupt_service: I) -> NRF53<I> {
+impl NRF53 {
+    pub unsafe fn new() -> NRF53 {
         NRF53 {
             mpu: cortexm33::mpu::MPU::new(),
             userspace_kernel_boundary: cortexm33::syscall::SysCall::new(),
             // The NRF53's systick is uncalibrated, but is clocked from the
             // 64Mhz CPU clock.
             systick: cortexm33::systick::SysTick::new_with_calibration(64000000),
-            interrupt_service,
+            interrupt_service: Nrf53InterruptService::new(&gpio::PORT),
         }
     }
 }
 
-impl<I: InterruptService> kernel::Chip for NRF53<I> {
+impl kernel::Chip for NRF53 {
     type MPU = cortexm33::mpu::MPU;
     type UserspaceKernelBoundary = cortexm33::syscall::SysCall;
     type SysTick = cortexm33::systick::SysTick;

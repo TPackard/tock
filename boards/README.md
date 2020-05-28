@@ -11,6 +11,7 @@ that Tock supports.
 | [Nordic nRF52-DK](nordic/nrf52dk/README.md)                          | ARM Cortex-M4   | nRF52832       | jLink      | tockloader     | No                |
 | [Nordic nRF52840-DK](nordic/nrf52840dk/README.md)                    | ARM Cortex-M4   | nRF52840       | jLink      | tockloader     | No                |
 | [Nordic nRF52840-Dongle](nordic/nrf52840_dongle/README.md)           | ARM Cortex-M4   | nRF52840       | jLink      | tockloader     | No                |
+| [Nordic nRF5340-PDK](nordic/nrf5340pdk/README.md)                    | ARM Cortex-M33  | nRF5340        | jLink      | tockloader     | No                |
 | [ACD52832](acd52832/README.md)                                       | ARM Cortex-M4   | nRF52832       | jLink      | tockloader     | No                |
 | [Nano 33 BLE](nano33ble/README.md)                                   | ARM Cortex-M4   | nRF52840       | BOSSA      | bossac         | No                |
 | [ST Nucleo F446RE](nucleo_f446re/README.md)                          | ARM Cortex-M4   | STM32F446      | openocd    | custom         | #1827             |
