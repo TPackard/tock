@@ -82,13 +82,9 @@ const BUTTON2_PIN: Pin = Pin::P0_24;
 const BUTTON3_PIN: Pin = Pin::P0_08;
 const BUTTON4_PIN: Pin = Pin::P0_09;
 
-#[allow(dead_code)]
 const UART_RTS: Option<Pin> = Some(Pin::P0_19);
-#[allow(dead_code)]
 const UART_TXD: Pin = Pin::P0_20;
-#[allow(dead_code)]
 const UART_CTS: Option<Pin> = Some(Pin::P0_21);
-#[allow(dead_code)]
 const UART_RXD: Pin = Pin::P0_22;
 
 #[allow(dead_code)]
@@ -115,8 +111,7 @@ mod tests;
 // Whether to use UART debugging or Segger RTT (USB) debugging.
 // - Set to false to use UART.
 // - Set to true to use Segger RTT over USB.
-#[allow(dead_code)]
-const USB_DEBUGGING: bool = false;
+const USB_DEBUGGING: bool = true;
 
 // State for loading and holding applications.
 // How should the kernel respond when a process faults.
@@ -139,9 +134,18 @@ static mut CHIP: Option<&'static nrf53::chip::NRF53> = None;
 pub static mut STACK_MEMORY: [u8; 0x1000] = [0; 0x1000];
 
 struct Platform {
+    alarm: &'static capsules::alarm::AlarmDriver<
+        'static,
+        capsules::virtual_alarm::VirtualMuxAlarm<'static, nrf53::rtc::Rtc<'static>>,
+    >,
     button: &'static capsules::button::Button<'static>,
     gpio: &'static capsules::gpio::GPIO<'static>,
     led: &'static capsules::led::LED<'static>,
+    pconsole: &'static capsules::process_console::ProcessConsole<
+        'static,
+        components::process_console::Capability,
+    >,
+    console: &'static capsules::console::Console<'static>,
 }
 
 impl kernel::Platform for Platform {
@@ -150,9 +154,11 @@ impl kernel::Platform for Platform {
         F: FnOnce(Option<&dyn kernel::Driver>) -> R,
     {
         match driver_num {
+            capsules::alarm::DRIVER_NUM => f(Some(self.alarm)),
             capsules::button::DRIVER_NUM => f(Some(self.button)),
             capsules::gpio::DRIVER_NUM => f(Some(self.gpio)),
             capsules::led::DRIVER_NUM => f(Some(self.led)),
+            capsules::console::DRIVER_NUM => f(Some(self.console)),
             _ => f(None),
         }
     }
@@ -251,6 +257,49 @@ pub unsafe fn reset_handler() {
     );
     DynamicDeferredCall::set_global_instance(dynamic_deferred_caller);
 
+    let rtc = &nrf53::rtc::RTC;
+    rtc.start();
+    let mux_alarm = components::alarm::AlarmMuxComponent::new(rtc)
+        .finalize(components::alarm_mux_component_helper!(nrf53::rtc::Rtc));
+    let alarm = components::alarm::AlarmDriverComponent::new(board_kernel, mux_alarm)
+        .finalize(components::alarm_component_helper!(nrf53::rtc::Rtc));
+
+    let uart_channel: &dyn kernel::hil::uart::Uart = if USB_DEBUGGING {
+        let mut rtt_memory_refs =
+            components::segger_rtt::SeggerRttMemoryComponent::new().finalize(());
+
+        // XXX: This is inherently unsafe as it aliases the mutable reference to rtt_memory. This
+        // aliases reference is only used inside a panic handler, which should be OK, but maybe we
+        // should use a const reference to rtt_memory and leverage interior mutability instead.
+        self::io::set_rtt_memory(&mut *rtt_memory_refs.get_rtt_memory_ptr());
+
+        let rtt = components::segger_rtt::SeggerRttComponent::new(mux_alarm, rtt_memory_refs)
+            .finalize(components::segger_rtt_component_helper!(nrf53::rtc::Rtc));
+        rtt
+    } else {
+        nrf53::uart::UARTE0.initialize(
+            nrf53::pinmux::Pinmux::new(UART_TXD as u32),
+            nrf53::pinmux::Pinmux::new(UART_RXD as u32),
+            UART_CTS.map(|x| nrf53::pinmux::Pinmux::new(x as u32)),
+            UART_RTS.map(|x| nrf53::pinmux::Pinmux::new(x as u32)),
+        );
+        &nrf53::uart::UARTE0
+    };
+
+    // Create a shared UART channel for the console and for kernel debug.
+    let uart_mux =
+        components::console::UartMuxComponent::new(uart_channel, 115200, dynamic_deferred_caller)
+            .finalize(());
+
+    let pconsole =
+        components::process_console::ProcessConsoleComponent::new(board_kernel, uart_mux)
+            .finalize(());
+
+    // Setup the console.
+    let console = components::console::ConsoleComponent::new(board_kernel, uart_mux).finalize(());
+    // Create the debugger object that handles calls to `debug!()`.
+    components::debug_writer::DebugWriterComponent::new(uart_mux).finalize(());
+
     // Start all of the clocks. Low power operation will require a better
     // approach than this.
     nrf53::clock::CLOCK.low_stop();
@@ -264,16 +313,20 @@ pub unsafe fn reset_handler() {
     while !nrf53::clock::CLOCK.high_started() {}
 
     let platform = Platform {
+        alarm,
         button,
         gpio,
         led,
+        pconsole: pconsole,
+        console: console,
     };
 
     // Run optional kernel tests.
     //
     tests::blink::run();
 
-    debug!("Initialization complete. Entering main loop");
+    platform.pconsole.start();
+    debug!("Initialization complete. Entering main loop\r");
 
     extern "C" {
         /// Beginning of the ROM region containing app images.

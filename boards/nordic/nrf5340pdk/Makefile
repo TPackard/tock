@@ -15,7 +15,7 @@ ifdef PORT
   TOCKLOADER_GENERAL_FLAGS += --port $(PORT)
 endif
 
-TOCKLOADER_JTAG_FLAGS = --jlink --board nrf5340pdk
+TOCKLOADER_JTAG_FLAGS = --jlink --board nrf5340dk
 
 # Upload the kernel over JTAG
 .PHONY: flash

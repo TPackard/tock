@@ -1,3 +1,4 @@
+use kernel::debug;
 use kernel::hil::gpio::{Configure, Output};
 use nrf53::gpio;
 
@@ -19,5 +20,7 @@ pub unsafe fn run() {
         for _ in 0..WAIT_ITER {
             led4.set();
         }
+
+        debug!("blink");
     }
 }

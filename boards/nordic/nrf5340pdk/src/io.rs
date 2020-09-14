@@ -4,7 +4,7 @@ use cortexm33;
 use kernel::debug;
 use kernel::debug::IoWrite;
 use kernel::hil::led;
-//use kernel::hil::uart::{self, Configure};
+use kernel::hil::uart::{self, Configure};
 use nrf53::gpio::Pin;
 
 use crate::CHIP;
@@ -40,8 +40,7 @@ impl Write for Writer {
 impl IoWrite for Writer {
     fn write(&mut self, buf: &[u8]) {
         match self {
-            Writer::WriterUart(ref mut _initialized) => {
-                /*
+            Writer::WriterUart(ref mut initialized) => {
                 let uart = unsafe { &mut nrf53::uart::UARTE0 };
                 if !*initialized {
                     *initialized = true;
@@ -59,7 +58,6 @@ impl IoWrite for Writer {
                     }
                     while !uart.tx_ready() {}
                 }
-                */
             }
             Writer::WriterRtt(rtt_memory) => {
                 let up_buffer = unsafe { &*rtt_memory.get_up_buffer_ptr() };

@@ -11,7 +11,10 @@ pub mod gpio;
 pub mod interrupt_service;
 pub mod nvmc;
 pub mod peripheral_interrupts;
+pub mod pinmux;
 pub mod power;
+pub mod rtc;
+pub mod uart;
 pub mod usbreg;
 
 pub use crt1::init;
