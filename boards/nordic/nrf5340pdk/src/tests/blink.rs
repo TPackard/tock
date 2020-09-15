@@ -1,4 +1,4 @@
-use kernel::debug;
+use kernel::{debug_gpio, debug_verbose};
 use kernel::hil::gpio::{Configure, Output};
 use nrf53::gpio;
 
@@ -21,6 +21,7 @@ pub unsafe fn run() {
             led4.set();
         }
 
-        debug!("blink");
+        debug_verbose!("blink");
+        debug_gpio!(1, toggle);
     }
 }

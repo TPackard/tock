@@ -1,5 +1,4 @@
-//! Universal asynchronous receiver/transmitter with EasyDMA (UARTE). UARTE2
-//! and UARTE3 are not functional as of May 2020 (see nRF5340 errata #84).
+//! Universal asynchronous receiver/transmitter with EasyDMA (UARTE).
 //! Based upon the nRF52 UART driver by Niklas Adolfsson.
 
 use core;
@@ -19,9 +18,15 @@ const UARTE_MAX_BUFFER_SIZE: u32 = 0xff;
 
 static mut BYTE: u8 = 0;
 
-// TODO: add the other 9 addresses.
-const UARTE_BASE: StaticRef<UarteRegisters> =
+// NOTE: UARTE2 and UARTE3 are not functional as of Sept. 2020 (see nRF5340 errata #84).
+#[allow(dead_code)]
+const UARTE_BASE_NONSECURE: StaticRef<UarteRegisters> =
+    unsafe { StaticRef::new(0x40008000 as *const UarteRegisters) };
+const UARTE_BASE_SECURE: StaticRef<UarteRegisters> =
     unsafe { StaticRef::new(0x50008000 as *const UarteRegisters) };
+#[allow(dead_code)]
+const UARTE_BASE_NETWORK: StaticRef<UarteRegisters> =
+    unsafe { StaticRef::new(0x41013000 as *const UarteRegisters) };
 
 register_structs! {
     UarteRegisters {
@@ -288,7 +293,7 @@ impl<'a> Uarte<'a> {
     /// Constructor
     pub const fn new() -> Uarte<'a> {
         Uarte {
-            registers: UARTE_BASE,
+            registers: UARTE_BASE_SECURE,
             tx_client: OptionalCell::empty(),
             tx_buffer: kernel::common::cells::TakeCell::empty(),
             tx_len: Cell::new(0),
@@ -315,9 +320,7 @@ impl<'a> Uarte<'a> {
 
         cts.map_or_else(
             || {
-                // If no CTS pin is provided, then we need to mark it as
-                // disconnected in the register.
-                regs.pselcts.write(Psel::CONNECT::SET);
+                regs.pselcts.write(Psel::CONNECT::Disconnected);
             },
             |c| {
                 regs.pselcts.write(Psel::PIN.val(c.into()));
@@ -326,9 +329,7 @@ impl<'a> Uarte<'a> {
 
         rts.map_or_else(
             || {
-                // If no RTS pin is provided, then we need to mark it as
-                // disconnected in the register.
-                regs.pselrts.write(Psel::CONNECT::SET);
+                regs.pselrts.write(Psel::CONNECT::Disconnected);
             },
             |r| {
                 regs.pselrts.write(Psel::PIN.val(r.into()));
@@ -353,13 +354,12 @@ impl<'a> Uarte<'a> {
             56000 => regs.baudrate.set(0x00E50000),
             57600 => regs.baudrate.set(0x00EB0000),
             76800 => regs.baudrate.set(0x013A9000),
-            115200 => regs.baudrate.set(0x01D60000),
             230400 => regs.baudrate.set(0x03B00000),
             250000 => regs.baudrate.set(0x04000000),
             460800 => regs.baudrate.set(0x07400000),
             921600 => regs.baudrate.set(0x0F000000),
             1000000 => regs.baudrate.set(0x10000000),
-            _ => regs.baudrate.set(0x01D60000), //setting default to 115200
+            115200 | _ => regs.baudrate.set(0x01D60000),  // Default to 115200
         }
     }
 

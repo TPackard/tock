@@ -11,9 +11,24 @@ use kernel::hil::Controller;
 /// Number of capture/compare registers.
 const NUM_CC: usize = 4;
 
-// TODO: add the other addresses.
-const RTC0_BASE: StaticRef<RtcRegisters> =
+#[allow(dead_code)]
+const RTC0_BASE_NONSECURE: StaticRef<RtcRegisters> =
+    unsafe { StaticRef::new(0x40014000 as *const RtcRegisters) };
+const RTC0_BASE_SECURE: StaticRef<RtcRegisters> =
     unsafe { StaticRef::new(0x50014000 as *const RtcRegisters) };
+#[allow(dead_code)]
+const RTC0_BASE_NETWORK: StaticRef<RtcRegisters> =
+    unsafe { StaticRef::new(0x41011000 as *const RtcRegisters) };
+
+#[allow(dead_code)]
+const RTC1_BASE_NONSECURE: StaticRef<RtcRegisters> =
+    unsafe { StaticRef::new(0x40015000 as *const RtcRegisters) };
+#[allow(dead_code)]
+const RTC1_BASE_SECURE: StaticRef<RtcRegisters> =
+    unsafe { StaticRef::new(0x50015000 as *const RtcRegisters) };
+#[allow(dead_code)]
+const RTC1_BASE_NETWORK: StaticRef<RtcRegisters> =
+    unsafe { StaticRef::new(0x41016000 as *const RtcRegisters) };
 
 register_structs! {
     RtcRegisters {
@@ -139,7 +154,7 @@ pub struct Rtc<'a> {
 }
 
 pub static mut RTC: Rtc = Rtc {
-    registers: RTC0_BASE,
+    registers: RTC0_BASE_SECURE,
     callback: OptionalCell::empty(),
 };
 

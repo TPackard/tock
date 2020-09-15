@@ -55,7 +55,8 @@ pub unsafe extern "C" fn systick_handler() {
     mov r0, #0
     msr CONTROL, r0
 
-    // TODO: coming from secure or non-secure state?
+    // TODO: exception taken to secure or non-secure state?
+    // bit #0 indicates secure/non-secure state (M33 User Guide r1p0, table 2-23).
     movw LR, #0xFFF9
     movt LR, #0xFFFF
 
@@ -91,7 +92,7 @@ pub unsafe extern "C" fn generic_isr() {
     msr CONTROL, r0
 
     // This is a special address to return Thread mode with Main stack
-    // TODO: coming from secure or non-secure state?
+    // TODO: exception taken to secure or non-secure state? (see above)
     movw LR, #0xFFF9
     movt LR, #0xFFFF
 

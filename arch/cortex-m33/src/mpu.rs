@@ -222,7 +222,8 @@ pub struct CortexMRegion {
 impl CortexMRegion {
     fn new(
         start: *const u8,
-        size: usize,
+        allocated_size: usize,
+        protected_size: usize,
         permissions: mpu::Permissions,
     ) -> CortexMRegion {
         // Determine access and execute permissions
@@ -256,12 +257,12 @@ impl CortexMRegion {
             + execute;
 
         // Limit address register
-        let limit_address = (start as usize) + size - 1;
+        let limit_address = (start as usize) + protected_size - 1;
         let limit_address = RegionLimitAddress::LIMIT.val((limit_address as u32) >> 5)
             + RegionLimitAddress::EN::Enable;
 
         CortexMRegion {
-            location: Some((start, size)),
+            location: Some((start, allocated_size)),
             base_address,
             limit_address,
         }
@@ -355,7 +356,7 @@ impl kernel::mpu::MPU for MPU {
             start += 32 - (start % 32);
         }
         if size % 32 != 0 {
-            size += 32 - (start % 32);
+            size += 32 - (size % 32);
         }
 
         // Check that our logical region fits in memory.
@@ -365,6 +366,7 @@ impl kernel::mpu::MPU for MPU {
 
         let region = CortexMRegion::new(
             start as *const u8,
+            size,
             size,
             permissions,
         );
@@ -391,22 +393,27 @@ impl kernel::mpu::MPU for MPU {
             }
         }
 
-        // Make sure there is enough memory for app memory and kernel memory.
-        // TODO: should allocate a bit more in case more memory needed later.
-        let mut region_size = cmp::max(
-            min_memory_size,
-            initial_app_memory_size + initial_kernel_memory_size,
-        );
-
         // The region should start as close as possible to the start of the unallocated memory.
         let mut region_start = unallocated_memory_start as usize;
+        let mut app_memory_size = initial_app_memory_size;
 
         // Regions must be 32 byte aligned.
         if region_start % 32 != 0 {
             region_start += 32 - (region_start % 32);
         }
+        if app_memory_size % 32 != 0 {
+            app_memory_size += 32 - (app_memory_size % 32);
+        }
+
+        // Make sure there is enough memory for app memory and kernel memory. Allocate a bit more
+        // space so that there's room for expanding the app and kernel memory regions.
+        let combined_memory_size = app_memory_size + initial_kernel_memory_size;
+        let mut region_size = cmp::max(
+            min_memory_size,
+            combined_memory_size + combined_memory_size / 4,
+        );
         if region_size % 32 != 0 {
-            region_size += 32 - (region_start % 32);
+            region_size += 32 - (region_size % 32);
         }
 
         // Make sure the region fits in the unallocated memory.
@@ -416,11 +423,10 @@ impl kernel::mpu::MPU for MPU {
             return None;
         }
 
-        // TODO: protect kernel memory region.
-
         let region = CortexMRegion::new(
             region_start as *const u8,
             region_size,
+            app_memory_size,
             permissions,
         );
 
@@ -444,19 +450,23 @@ impl kernel::mpu::MPU for MPU {
             }
         };
 
-        let app_memory_break = app_memory_break as usize;
+        let mut app_memory_break = app_memory_break as usize;
         let kernel_memory_break = kernel_memory_break as usize;
+
+        // Regions must be 32 byte aligned.
+        if app_memory_break % 32 != 0 {
+            app_memory_break += 32 - (app_memory_break % 32);
+        }
 
         // Out of memory
         if app_memory_break > kernel_memory_break {
             return Err(());
         }
 
-        // TODO: protect kernel memory region.
-
         let region = CortexMRegion::new(
             region_start as *const u8,
             region_size,
+            app_memory_break - region_start,
             permissions,
         );
 

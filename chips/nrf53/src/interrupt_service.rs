@@ -62,7 +62,6 @@ impl Nrf53InterruptService {
 impl InterruptService for Nrf53InterruptService {
     unsafe fn service_interrupt(&self, interrupt: u32) -> bool {
         match interrupt {
-            // TODO: should these do the same thing?
             peripheral_interrupts::GPIOTE0 => self.gpio_port.handle_interrupt(),
             peripheral_interrupts::GPIOTE1 => self.gpio_port.handle_interrupt(),
             peripheral_interrupts::POWER => power::POWER.handle_interrupt(),
