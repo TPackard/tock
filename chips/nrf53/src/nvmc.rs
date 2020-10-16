@@ -188,6 +188,14 @@ impl NrfPage {
     }
 }
 
+impl Default for NrfPage {
+    fn default() -> Self {
+        Self {
+            0: [0; PAGE_SIZE as usize],
+        }
+    }
+}
+
 impl Index<usize> for NrfPage {
     type Output = u8;
 

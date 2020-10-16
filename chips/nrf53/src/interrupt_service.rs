@@ -1,5 +1,7 @@
 use crate::gpio;
 use crate::power;
+use crate::rtc;
+use crate::uart;
 use crate::peripheral_interrupts;
 
 /// Interface for handling interrupts on a hardware chip.
@@ -49,22 +51,23 @@ pub trait InterruptService {
     unsafe fn service_interrupt(&self, interrupt: u32) -> bool;
 }
 
-pub struct Nrf53InterruptService {
-    gpio_port: &'static gpio::Port,
+pub struct Nrf53InterruptService<'a> {
+    gpio_port: &'a gpio::Port<'a>,
 }
 
-impl Nrf53InterruptService {
-    pub unsafe fn new(gpio_port: &'static gpio::Port) -> Nrf53InterruptService {
+impl<'a> Nrf53InterruptService<'a> {
+    pub unsafe fn new(gpio_port: &'a gpio::Port<'a>) -> Nrf53InterruptService<'a> {
         Nrf53InterruptService { gpio_port }
     }
 }
 
-impl InterruptService for Nrf53InterruptService {
+impl InterruptService for Nrf53InterruptService<'_> {
     unsafe fn service_interrupt(&self, interrupt: u32) -> bool {
         match interrupt {
             peripheral_interrupts::GPIOTE0 => self.gpio_port.handle_interrupt(),
-            peripheral_interrupts::GPIOTE1 => self.gpio_port.handle_interrupt(),
             peripheral_interrupts::POWER => power::POWER.handle_interrupt(),
+            peripheral_interrupts::RTC0 => rtc::RTC.handle_interrupt(),
+            peripheral_interrupts::UARTE0 => uart::UARTE0.handle_interrupt(),
             _ => return false,
         }
         true

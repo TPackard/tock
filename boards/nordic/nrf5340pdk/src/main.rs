@@ -59,15 +59,16 @@
 //! | P0.31 | P24 18 | LED 4    |
 
 #![no_std]
-#![no_main]
+// Disable this attribute when documenting, as a workaround for
+// https://github.com/rust-lang/rust/issues/62184.
+#![cfg_attr(not(doc), no_main)]
+#![feature(const_in_array_repeat_expressions)]
 #![deny(missing_docs)]
 
-#[allow(unused_imports)]
-use kernel::{create_capability, debug, debug_gpio, debug_verbose, static_init};
-
-use kernel::capabilities;
 use kernel::common::dynamic_deferred_call::{DynamicDeferredCall, DynamicDeferredCallClientState};
 use kernel::component::Component;
+#[allow(unused_imports)]
+use kernel::{capabilities, create_capability, debug, debug_gpio, debug_verbose, static_init};
 use nrf53::gpio::Pin;
 
 // The nRF5340PDK LEDs (see back of board)
@@ -120,11 +121,8 @@ const FAULT_RESPONSE: kernel::procs::FaultResponse = kernel::procs::FaultRespons
 // Number of concurrent processes this platform supports.
 const NUM_PROCS: usize = 8;
 
-#[link_section = ".app_memory"]
-static mut APP_MEMORY: [u8; 0x3C000] = [0; 0x3C000];
-
 static mut PROCESSES: [Option<&'static dyn kernel::procs::ProcessType>; NUM_PROCS] =
-    [None, None, None, None, None, None, None, None];
+    [None; NUM_PROCS];
 
 static mut CHIP: Option<&'static nrf53::chip::NRF53> = None;
 
@@ -133,19 +131,21 @@ static mut CHIP: Option<&'static nrf53::chip::NRF53> = None;
 #[link_section = ".stack_buffer"]
 pub static mut STACK_MEMORY: [u8; 0x1000] = [0; 0x1000];
 
-struct Platform {
+/// Supported drivers by the platform
+pub struct Platform {
     alarm: &'static capsules::alarm::AlarmDriver<
         'static,
         capsules::virtual_alarm::VirtualMuxAlarm<'static, nrf53::rtc::Rtc<'static>>,
     >,
-    button: &'static capsules::button::Button<'static>,
-    gpio: &'static capsules::gpio::GPIO<'static>,
-    led: &'static capsules::led::LED<'static>,
+    button: &'static capsules::button::Button<'static, nrf53::gpio::GPIOPin<'static>>,
     pconsole: &'static capsules::process_console::ProcessConsole<
         'static,
         components::process_console::Capability,
     >,
     console: &'static capsules::console::Console<'static>,
+    gpio: &'static capsules::gpio::GPIO<'static, nrf53::gpio::GPIOPin<'static>>,
+    led: &'static capsules::led::LED<'static, nrf53::gpio::GPIOPin<'static>>,
+    ipc: kernel::ipc::IPC,
 }
 
 impl kernel::Platform for Platform {
@@ -155,10 +155,11 @@ impl kernel::Platform for Platform {
     {
         match driver_num {
             capsules::alarm::DRIVER_NUM => f(Some(self.alarm)),
-            capsules::button::DRIVER_NUM => f(Some(self.button)),
+            capsules::console::DRIVER_NUM => f(Some(self.console)),
             capsules::gpio::DRIVER_NUM => f(Some(self.gpio)),
             capsules::led::DRIVER_NUM => f(Some(self.led)),
-            capsules::console::DRIVER_NUM => f(Some(self.console)),
+            capsules::button::DRIVER_NUM => f(Some(self.button)),
+            kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             _ => f(None),
         }
     }
@@ -171,50 +172,58 @@ pub unsafe fn reset_handler() {
     nrf53::init();
 
     let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(&PROCESSES));
-    let gpio = components::gpio::GpioComponent::new(board_kernel).finalize(
-        components::gpio_component_helper!(
-            &nrf53::gpio::PORT[Pin::P1_01],
-            &nrf53::gpio::PORT[Pin::P1_04],
-            &nrf53::gpio::PORT[Pin::P1_05],
-            &nrf53::gpio::PORT[Pin::P1_06],
-            &nrf53::gpio::PORT[Pin::P1_07],
-            &nrf53::gpio::PORT[Pin::P1_08],
-            &nrf53::gpio::PORT[Pin::P1_09],
-            &nrf53::gpio::PORT[Pin::P1_10],
-            &nrf53::gpio::PORT[Pin::P1_11],
-            &nrf53::gpio::PORT[Pin::P1_12],
-            &nrf53::gpio::PORT[Pin::P1_13],
-            &nrf53::gpio::PORT[Pin::P1_14],
-            &nrf53::gpio::PORT[Pin::P1_15]
-        ),
-    );
 
-    let button = components::button::ButtonComponent::new(board_kernel).finalize(
+    let gpio = components::gpio::GpioComponent::new(
+        board_kernel,
+        components::gpio_component_helper!(
+            nrf53::gpio::GPIOPin,
+            0 => &nrf53::gpio::PORT[Pin::P1_01],
+            1 => &nrf53::gpio::PORT[Pin::P1_04],
+            2 => &nrf53::gpio::PORT[Pin::P1_05],
+            3 => &nrf53::gpio::PORT[Pin::P1_06],
+            4 => &nrf53::gpio::PORT[Pin::P1_07],
+            5 => &nrf53::gpio::PORT[Pin::P1_08],
+            6 => &nrf53::gpio::PORT[Pin::P1_09],
+            7 => &nrf53::gpio::PORT[Pin::P1_10],
+            8 => &nrf53::gpio::PORT[Pin::P1_11],
+            9 => &nrf53::gpio::PORT[Pin::P1_12],
+            10 => &nrf53::gpio::PORT[Pin::P1_13],
+            11 => &nrf53::gpio::PORT[Pin::P1_14],
+            12 => &nrf53::gpio::PORT[Pin::P1_15]
+        ),
+    )
+    .finalize(components::gpio_component_buf!(nrf53::gpio::GPIOPin));
+
+    let button = components::button::ButtonComponent::new(
+        board_kernel,
         components::button_component_helper!(
+            nrf53::gpio::GPIOPin,
             (
                 &nrf53::gpio::PORT[BUTTON1_PIN],
                 kernel::hil::gpio::ActivationMode::ActiveLow,
                 kernel::hil::gpio::FloatingState::PullUp
-            ), //13
+            ), //23
             (
                 &nrf53::gpio::PORT[BUTTON2_PIN],
                 kernel::hil::gpio::ActivationMode::ActiveLow,
                 kernel::hil::gpio::FloatingState::PullUp
-            ), //14
+            ), //24
             (
                 &nrf53::gpio::PORT[BUTTON3_PIN],
                 kernel::hil::gpio::ActivationMode::ActiveLow,
                 kernel::hil::gpio::FloatingState::PullUp
-            ), //15
+            ), //8
             (
                 &nrf53::gpio::PORT[BUTTON4_PIN],
                 kernel::hil::gpio::ActivationMode::ActiveLow,
                 kernel::hil::gpio::FloatingState::PullUp
-            ) //16
+            ) //9
         ),
-    );
+    )
+    .finalize(components::button_component_buf!(nrf53::gpio::GPIOPin));
 
-    let led = components::led::LedsComponent::new().finalize(components::led_component_helper!(
+    let led = components::led::LedsComponent::new(components::led_component_helper!(
+        nrf53::gpio::GPIOPin,
         (
             &nrf53::gpio::PORT[LED1_PIN],
             kernel::hil::gpio::ActivationMode::ActiveLow
@@ -231,7 +240,8 @@ pub unsafe fn reset_handler() {
             &nrf53::gpio::PORT[LED4_PIN],
             kernel::hil::gpio::ActivationMode::ActiveLow
         )
-    ));
+    ))
+    .finalize(components::led_component_buf!(nrf53::gpio::GPIOPin));
 
     let chip = static_init!(nrf53::chip::NRF53, nrf53::chip::NRF53::new());
     CHIP = Some(chip);
@@ -241,13 +251,21 @@ pub unsafe fn reset_handler() {
     let process_management_capability =
         create_capability!(capabilities::ProcessManagementCapability);
     let main_loop_capability = create_capability!(capabilities::MainLoopCapability);
-
+    let memory_allocation_capability = create_capability!(capabilities::MemoryAllocationCapability);
+    let gpio_port = &nrf53::gpio::PORT;
     // Configure kernel debug gpios as early as possible
     kernel::debug::assign_gpios(
-        Some(&nrf53::gpio::PORT[LED1_PIN]),
-        Some(&nrf53::gpio::PORT[LED2_PIN]),
-        Some(&nrf53::gpio::PORT[LED3_PIN]),
+        Some(&gpio_port[LED1_PIN]),
+        Some(&gpio_port[LED2_PIN]),
+        Some(&gpio_port[LED3_PIN]),
     );
+
+    let rtc = &nrf53::rtc::RTC;
+    rtc.start();
+    let mux_alarm = components::alarm::AlarmMuxComponent::new(rtc)
+        .finalize(components::alarm_mux_component_helper!(nrf53::rtc::Rtc));
+    let alarm = components::alarm::AlarmDriverComponent::new(board_kernel, mux_alarm)
+        .finalize(components::alarm_component_helper!(nrf53::rtc::Rtc));
 
     let dynamic_deferred_call_clients =
         static_init!([DynamicDeferredCallClientState; 2], Default::default());
@@ -257,14 +275,8 @@ pub unsafe fn reset_handler() {
     );
     DynamicDeferredCall::set_global_instance(dynamic_deferred_caller);
 
-    let rtc = &nrf53::rtc::RTC;
-    rtc.start();
-    let mux_alarm = components::alarm::AlarmMuxComponent::new(rtc)
-        .finalize(components::alarm_mux_component_helper!(nrf53::rtc::Rtc));
-    let alarm = components::alarm::AlarmDriverComponent::new(board_kernel, mux_alarm)
-        .finalize(components::alarm_component_helper!(nrf53::rtc::Rtc));
-
     let uart_channel: &dyn kernel::hil::uart::Uart = if USB_DEBUGGING {
+        // Initialize early so any panic beyond this point can use the RTT memory object.
         let mut rtt_memory_refs =
             components::segger_rtt::SeggerRttMemoryComponent::new().finalize(());
 
@@ -315,28 +327,34 @@ pub unsafe fn reset_handler() {
     let platform = Platform {
         alarm,
         button,
-        gpio,
+        pconsole,
+        console,
         led,
-        pconsole: pconsole,
-        console: console,
+        gpio,
+        ipc: kernel::ipc::IPC::new(board_kernel, &memory_allocation_capability),
     };
 
     platform.pconsole.start();
+
     debug!("Initialization complete. Entering main loop\r");
 
     // Run optional kernel tests.
     //
-    tests::blink::run();
+    tests::blink::run(mux_alarm, LED4_PIN, BUTTON4_PIN);
+    //tests::button::run(BUTTON4_PIN);
 
+    /// These symbols are defined in the linker script.
     extern "C" {
         /// Beginning of the ROM region containing app images.
         static _sapps: u8;
-
         /// End of the ROM region containing app images.
-        ///
-        /// This symbol is defined in the linker script.
         static _eapps: u8;
+        /// Beginning of the RAM region for app memory.
+        static mut _sappmem: u8;
+        /// End of the RAM region for app memory.
+        static _eappmem: u8;
     }
+
     kernel::procs::load_processes(
         board_kernel,
         chip,
@@ -344,7 +362,10 @@ pub unsafe fn reset_handler() {
             &_sapps as *const u8,
             &_eapps as *const u8 as usize - &_sapps as *const u8 as usize,
         ),
-        &mut APP_MEMORY,
+        core::slice::from_raw_parts_mut(
+            &mut _sappmem as *mut u8,
+            &_eappmem as *const u8 as usize - &_sappmem as *const u8 as usize,
+        ),
         &mut PROCESSES,
         FAULT_RESPONSE,
         &process_management_capability,
@@ -354,5 +375,13 @@ pub unsafe fn reset_handler() {
         debug!("{:?}", err);
     });
 
-    board_kernel.kernel_loop(&platform, chip, None, &main_loop_capability);
+    let scheduler = components::sched::round_robin::RoundRobinComponent::new(&PROCESSES)
+        .finalize(components::rr_component_helper!(NUM_PROCS));
+    board_kernel.kernel_loop(
+        &platform,
+        chip,
+        Some(&platform.ipc),
+        scheduler,
+        &main_loop_capability,
+    );
 }

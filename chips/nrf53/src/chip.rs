@@ -10,8 +10,8 @@ use kernel::debug;
 pub struct NRF53 {
     mpu: cortexm33::mpu::MPU,
     userspace_kernel_boundary: cortexm33::syscall::SysCall,
-    systick: cortexm33::systick::SysTick,
-    interrupt_service: Nrf53InterruptService,
+    scheduler_timer: cortexm33::systick::SysTick,
+    interrupt_service: Nrf53InterruptService<'static>,
 }
 
 impl NRF53 {
@@ -21,7 +21,7 @@ impl NRF53 {
             userspace_kernel_boundary: cortexm33::syscall::SysCall::new(),
             // The NRF53's systick is uncalibrated, but is clocked from the
             // 64Mhz CPU clock.
-            systick: cortexm33::systick::SysTick::new_with_calibration(64000000),
+            scheduler_timer: cortexm33::systick::SysTick::new_with_calibration(64000000),
             interrupt_service: Nrf53InterruptService::new(&gpio::PORT),
         }
     }
@@ -30,14 +30,19 @@ impl NRF53 {
 impl kernel::Chip for NRF53 {
     type MPU = cortexm33::mpu::MPU;
     type UserspaceKernelBoundary = cortexm33::syscall::SysCall;
-    type SysTick = cortexm33::systick::SysTick;
+    type SchedulerTimer = cortexm33::systick::SysTick;
+    type WatchDog = ();
 
     fn mpu(&self) -> &Self::MPU {
         &self.mpu
     }
 
-    fn systick(&self) -> &Self::SysTick {
-        &self.systick
+    fn scheduler_timer(&self) -> &Self::SchedulerTimer {
+        &self.scheduler_timer
+    }
+
+    fn watchdog(&self) -> &Self::WatchDog {
+        &()
     }
 
     fn userspace_kernel_boundary(&self) -> &Self::UserspaceKernelBoundary {

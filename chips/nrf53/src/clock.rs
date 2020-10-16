@@ -238,11 +238,11 @@ const OSCILLATORS_BASE_SECURE: StaticRef<OscillatorsRegisters> =
 
 /// Interrupt sources
 pub enum InterruptField {
-    HFCLKSTARTED = (1 << 0),
-    LFCLKSTARTED = (1 << 1),
-    DONE = (1 << 7),
-    HFCLKAUDIOSTARTED = (1 << 8),
-    HFCLK192MSTARTED = (1 << 9),
+    HFCLKSTARTED = 1 << 0,
+    LFCLKSTARTED = 1 << 1,
+    DONE = 1 << 7,
+    HFCLKAUDIOSTARTED = 1 << 8,
+    HFCLK192MSTARTED = 1 << 9,
 }
 
 /// Low frequency clock source

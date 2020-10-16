@@ -670,20 +670,20 @@ pub unsafe fn print_cortexm_state(writer: &mut dyn Write) {
     }
 }
 
-// Table 2.5
-// http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0553a/CHDBIBGJ.html
+// Table 2-10 in ARM Cortex-M33 Devices Generic User Guide.
 pub fn ipsr_isr_number_to_str(isr_number: usize) -> &'static str {
     match isr_number {
         0 => "Thread Mode",
-        1 => "Reserved",
+        1 => "Reset",
         2 => "NMI",
         3 => "HardFault",
         4 => "MemManage",
         5 => "BusFault",
         6 => "UsageFault",
-        7..=10 => "Reserved",
+        7 => "SecureFault",
+        8..=10 => "Reserved",
         11 => "SVCall",
-        12 => "Reserved for Debug",
+        12 => "DebugMonitor",
         13 => "Reserved",
         14 => "PendSV",
         15 => "SysTick",

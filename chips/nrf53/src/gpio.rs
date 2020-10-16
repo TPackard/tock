@@ -63,11 +63,15 @@ register_structs! {
         (0x1A0 => _reserved6),
         /// Publish configuration for event events_port.
         (0x1FC => publish_port: ReadWrite<u32, Configuration::Register>),
+        (0x200 => _reserved7),
         /// Enable interrupts.
         (0x304 => intenset: ReadWrite<u32, Interrupt::Register>),
         /// Disable interrupts.
         (0x308 => intenclr: ReadWrite<u32, Interrupt::Register>),
-        (0x30C => _reserved7),
+        (0x30C => _reserved8),
+        /// Latency selection for event mode with rising or falling edge detection on the pin.
+        (0x504 => latency: ReadWrite<u32, Latency::Register>),
+        (0x508 => _reserved9),
         /// Configuration for tasks_out\[n\], tasks_set\[n\], tasks_clr\[n\], and events_in\[n\].
         (0x510 => config: [ReadWrite<u32, GpioteConfig::Register>; NUM_GPIOTE]),
         (0x530 => @END),
@@ -132,6 +136,13 @@ register_bitfields! [u32,
         PORT 31
     ],
 
+    Latency [
+        LATENCY OFFSET(0) NUMBITS(1) [
+            LowPower = 0,
+            LowLatency = 1
+        ]
+    ],
+
     GpioteConfig [
         MODE OFFSET(0) NUMBITS(2) [
             /// Specified pin will not be acquired by GPIOTE.
@@ -145,10 +156,8 @@ register_bitfields! [u32,
             /// pin can no longer be written as a regular output pin from the GPIO module.
             Task = 3
         ],
-        /// Selected GPIO pin.
-        PSEL OFFSET(8) NUMBITS(5) [],
-        /// Port number.
-        PORT OFFSET(13) NUMBITS(1) [],
+        /// Selected GPIO pin and port number.
+        PSEL OFFSET(8) NUMBITS(6) [],
         /// Operation performed when tasks_out\[n\] triggered in task mode or that shall trigger
         /// events_in\[n\] event in event mode.
         POLARITY OFFSET(16) NUMBITS(2) [
@@ -320,16 +329,16 @@ pub static mut PORT: Port = Port {
     pins: unsafe { &mut PINS },
 };
 
-pub struct GPIOPin {
+pub struct GPIOPin<'a> {
     pin: u8,
     port: u8,
-    client: OptionalCell<&'static dyn hil::gpio::Client>,
+    client: OptionalCell<&'a dyn hil::gpio::Client>,
     gpiote_registers: StaticRef<GpioteRegisters>,
     gpio_registers: StaticRef<GpioRegisters>,
 }
 
-impl GPIOPin {
-    pub const fn new(pin: Pin) -> GPIOPin {
+impl<'a> GPIOPin<'a> {
+    pub const fn new(pin: Pin) -> GPIOPin<'a> {
         GPIOPin {
             pin: ((pin as usize) % GPIO_PER_PORT) as u8,
             port: ((pin as usize) / GPIO_PER_PORT) as u8,
@@ -345,7 +354,7 @@ impl GPIOPin {
     }
 }
 
-impl hil::gpio::Configure for GPIOPin {
+impl hil::gpio::Configure for GPIOPin<'_> {
     fn set_floating_state(&self, mode: hil::gpio::FloatingState) {
         let gpio_regs = &*self.gpio_registers;
         let pin_config = match mode {
@@ -419,14 +428,14 @@ impl hil::gpio::Configure for GPIOPin {
     }
 }
 
-impl hil::gpio::Input for GPIOPin {
+impl hil::gpio::Input for GPIOPin<'_> {
     fn read(&self) -> bool {
         let gpio_regs = &*self.gpio_registers;
         gpio_regs.in_.get() & (1 << self.pin) != 0
     }
 }
 
-impl hil::gpio::Output for GPIOPin {
+impl hil::gpio::Output for GPIOPin<'_> {
     fn set(&self) {
         let gpio_regs = &*self.gpio_registers;
         gpio_regs.outset.set(1 << self.pin);
@@ -445,10 +454,10 @@ impl hil::gpio::Output for GPIOPin {
     }
 }
 
-impl hil::gpio::Pin for GPIOPin {}
+impl hil::gpio::Pin for GPIOPin<'_> {}
 
-impl hil::gpio::Interrupt for GPIOPin {
-    fn set_client(&self, client: &'static dyn hil::gpio::Client) {
+impl<'a> hil::gpio::Interrupt<'a> for GPIOPin<'a> {
+    fn set_client(&self, client: &'a dyn hil::gpio::Client) {
         self.client.set(client);
     }
 
@@ -471,8 +480,12 @@ impl hil::gpio::Interrupt for GPIOPin {
             };
             let regs = &*self.gpiote_registers;
             let pin: u32 = (GPIO_PER_PORT as u32 * self.port as u32) + self.pin as u32;
+
+            regs.intenclr.write(Interrupt::PORT::SET);
             regs.config[channel].write(GpioteConfig::MODE::Event + GpioteConfig::PSEL.val(pin) + polarity);
+            regs.latency.write(Latency::LATENCY::LowLatency);
             regs.intenset.set(1 << channel);
+            regs.intenset.write(Interrupt::PORT::SET);
         } else {
             debug!("No available GPIOTE interrupt channels");
         }
@@ -488,9 +501,9 @@ impl hil::gpio::Interrupt for GPIOPin {
     }
 }
 
-impl hil::gpio::InterruptPin for GPIOPin {}
+impl<'a> hil::gpio::InterruptPin<'a> for GPIOPin<'a> {}
 
-impl GPIOPin {
+impl GPIOPin<'_> {
     /// Allocate a GPIOTE channel
     /// If the channel couldn't be allocated return error instead
     fn allocate_channel(&self) -> Result<usize, ()> {
@@ -523,25 +536,25 @@ impl GPIOPin {
     }
 }
 
-pub struct Port {
-    pub pins: &'static mut [GPIOPin],
+pub struct Port<'a> {
+    pub pins: &'a mut [GPIOPin<'a>],
 }
 
-impl Index<Pin> for Port {
-    type Output = GPIOPin;
+impl<'a> Index<Pin> for Port<'a> {
+    type Output = GPIOPin<'a>;
 
-    fn index(&self, index: Pin) -> &GPIOPin {
+    fn index(&self, index: Pin) -> &GPIOPin<'a> {
         &self.pins[index as usize]
     }
 }
 
-impl IndexMut<Pin> for Port {
-    fn index_mut(&mut self, index: Pin) -> &mut GPIOPin {
+impl<'a> IndexMut<Pin> for Port<'a> {
+    fn index_mut(&mut self, index: Pin) -> &mut GPIOPin<'a> {
         &mut self.pins[index as usize]
     }
 }
 
-impl Port {
+impl Port<'_> {
     /// GPIOTE interrupt: check each GPIOTE channel, if any has
     /// fired then trigger its corresponding pin's interrupt handler.
     pub fn handle_interrupt(&self) {
@@ -551,7 +564,7 @@ impl Port {
 
         for (i, ev) in regs.events_in.iter().enumerate() {
             if ev.matches_any(Event::READY::SET) {
-                ev.write(Event::READY::SET);
+                ev.write(Event::READY::CLEAR);
                 // Get pin number for the event and `trigger` an interrupt manually on that pin
                 let pin = regs.config[i].read(GpioteConfig::PSEL) as usize;
                 self.pins[pin].handle_interrupt();

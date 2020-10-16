@@ -12,11 +12,11 @@ use tock_rt0;
 
 extern "C" {
     // Symbols defined in the linker file
-    static mut _erelocate: u32;
-    static mut _etext: u32;
-    static mut _ezero: u32;
-    static mut _srelocate: u32;
-    static mut _szero: u32;
+    static mut _erelocate: usize;
+    static mut _etext: usize;
+    static mut _ezero: usize;
+    static mut _srelocate: usize;
+    static mut _szero: usize;
     fn reset_handler();
 
     // _estack is not really a function, but it makes the types work
@@ -34,7 +34,7 @@ unsafe extern "C" fn unhandled_interrupt() {
     let mut interrupt_number: u32;
 
     // IPSR[8:0] holds the currently active interrupt
-    asm!(
+    llvm_asm!(
     "mrs    r0, ipsr                    "
     : "={r0}"(interrupt_number)
     :
