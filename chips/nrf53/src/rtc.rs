@@ -45,16 +45,16 @@ register_structs! {
         (0x040 => tasks_capture: [WriteOnly<u32, Task::Register>; NUM_CC]),
         (0x050 => _reserved2),
         /// Subscribe configuration for task START.
-        (0x080 => subscribe_start: ReadWrite<u32, Configuration::Register>),
+        (0x080 => subscribe_start: ReadWrite<u32, DPPIConfig::Register>),
         /// Subscribe configuration for task STOP.
-        (0x084 => subscribe_stop: ReadWrite<u32, Configuration::Register>),
+        (0x084 => subscribe_stop: ReadWrite<u32, DPPIConfig::Register>),
         /// Subscribe configuration for task CLEAR.
-        (0x088 => subscribe_clear: ReadWrite<u32, Configuration::Register>),
+        (0x088 => subscribe_clear: ReadWrite<u32, DPPIConfig::Register>),
         /// Subscribe configuration for task TRIGOVRFLW.
-        (0x08C => subscribe_trigovrflw: ReadWrite<u32, Configuration::Register>),
+        (0x08C => subscribe_trigovrflw: ReadWrite<u32, DPPIConfig::Register>),
         (0x090 => _reserved3),
         /// Subscribe configuration for task CAPTURE\[n\].
-        (0x0C0 => subscribe_capture: [ReadWrite<u32, Configuration::Register>; NUM_CC]),
+        (0x0C0 => subscribe_capture: [ReadWrite<u32, DPPIConfig::Register>; NUM_CC]),
         (0x0D0 => _reserved4),
         /// Event on COUNTER increment.
         (0x100 => events_tick: ReadWrite<u32, Event::Register>),
@@ -65,12 +65,12 @@ register_structs! {
         (0x140 => events_compare: [ReadWrite<u32, Event::Register>; NUM_CC]),
         (0x150 => _reserved6),
         /// Publish configuration for event TICK.
-        (0x180 => publish_tick: ReadWrite<u32, Configuration::Register>),
+        (0x180 => publish_tick: ReadWrite<u32, DPPIConfig::Register>),
         /// Publish configuration for event OVRFLW.
-        (0x184 => publish_ovrflw: ReadWrite<u32, Configuration::Register>),
+        (0x184 => publish_ovrflw: ReadWrite<u32, DPPIConfig::Register>),
         (0x188 => _reserved7),
         /// Publish configuration for event COMPARE.
-        (0x1C0 => publish_compare: [ReadWrite<u32, Configuration::Register>; NUM_CC]),
+        (0x1C0 => publish_compare: [ReadWrite<u32, DPPIConfig::Register>; NUM_CC]),
         (0x1D0 => _reserved8),
         /// Shortcuts between local events and tasks.
         (0x200 => shorts: ReadWrite<u32, Shorts::Register>),
@@ -104,7 +104,7 @@ register_bitfields![u32,
         ENABLE 0
     ],
 
-    Configuration [
+    DPPIConfig [
         CHIDX OFFSET(0) NUMBITS(8),
         ENABLE OFFSET(31) NUMBITS(1)
     ],

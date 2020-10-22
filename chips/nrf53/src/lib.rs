@@ -14,6 +14,7 @@ pub mod peripheral_interrupts;
 pub mod pinmux;
 pub mod power;
 pub mod rtc;
+pub mod spi;
 pub mod uart;
 pub mod usbreg;
 

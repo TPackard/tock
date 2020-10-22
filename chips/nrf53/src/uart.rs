@@ -42,16 +42,16 @@ register_structs! {
         (0x02C => task_flush_rx: WriteOnly<u32, Task::Register>),
         (0x030 => _reserved2),
         /// Subscribe configuration for task STARTRX
-        (0x080 => subscribe_startrx: WriteOnly<u32, Configuration::Register>),
+        (0x080 => subscribe_startrx: WriteOnly<u32, DPPIConfig::Register>),
         /// Subscribe configuration for task STOPRX
-        (0x084 => subscribe_stoprx: WriteOnly<u32, Configuration::Register>),
+        (0x084 => subscribe_stoprx: WriteOnly<u32, DPPIConfig::Register>),
         /// Subscribe configuration for task STARTTX
-        (0x088 => subscribe_starttx: WriteOnly<u32, Configuration::Register>),
+        (0x088 => subscribe_starttx: WriteOnly<u32, DPPIConfig::Register>),
         /// Subscribe configuration for task STOPTX
-        (0x08C => subscribe_stoptx: WriteOnly<u32, Configuration::Register>),
+        (0x08C => subscribe_stoptx: WriteOnly<u32, DPPIConfig::Register>),
         (0x090 => _reserved3),
         /// Subscribe configuration for task FLUSHRX
-        (0x0AC => subscribe_flushrx: WriteOnly<u32, Configuration::Register>),
+        (0x0AC => subscribe_flushrx: WriteOnly<u32, DPPIConfig::Register>),
         (0x0B0 => _reserved4),
         /// Clear To Send
         (0x100 => event_cts: ReadWrite<u32, Event::Register>),
@@ -82,32 +82,32 @@ register_structs! {
         (0x158 => event_txstopped: ReadWrite<u32, Event::Register>),
         (0x15C => _reserved10),
         /// Publish configuration for event CTS
-        (0x180 => publish_cts: ReadWrite<u32, Configuration::Register>),
+        (0x180 => publish_cts: ReadWrite<u32, DPPIConfig::Register>),
         /// Publish configuration for event NCTS
-        (0x184 => publish_ncts: ReadWrite<u32, Configuration::Register>),
+        (0x184 => publish_ncts: ReadWrite<u32, DPPIConfig::Register>),
         /// Publish configuration for event RXDRDY
-        (0x188 => publish_rxdrdy: ReadWrite<u32, Configuration::Register>),
+        (0x188 => publish_rxdrdy: ReadWrite<u32, DPPIConfig::Register>),
         (0x18C => _reserved11),
         /// Publish configuration for event ENDRX
-        (0x190 => publish_endrx: ReadWrite<u32, Configuration::Register>),
+        (0x190 => publish_endrx: ReadWrite<u32, DPPIConfig::Register>),
         (0x194 => _reserved12),
         /// Publish configuration for event TXDRDY
-        (0x19C => publish_txdrdy: ReadWrite<u32, Configuration::Register>),
+        (0x19C => publish_txdrdy: ReadWrite<u32, DPPIConfig::Register>),
         /// Publish configuration for event ENDTX
-        (0x1A0 => publish_endtx: ReadWrite<u32, Configuration::Register>),
+        (0x1A0 => publish_endtx: ReadWrite<u32, DPPIConfig::Register>),
         /// Publish configuration for event ERROR
-        (0x1A4 => publish_error: ReadWrite<u32, Configuration::Register>),
+        (0x1A4 => publish_error: ReadWrite<u32, DPPIConfig::Register>),
         (0x1A8 => _reserved13),
         /// Publish configuration for event RXTO
-        (0x1C4 => publish_rxto: ReadWrite<u32, Configuration::Register>),
+        (0x1C4 => publish_rxto: ReadWrite<u32, DPPIConfig::Register>),
         (0x1C8 => _reserved14),
         /// Publish configuration for event RXSTARTED
-        (0x1CC => publish_rxstarted: ReadWrite<u32, Configuration::Register>),
+        (0x1CC => publish_rxstarted: ReadWrite<u32, DPPIConfig::Register>),
         /// Publish configuration for event TXSTARTED
-        (0x1D0 => publish_txstarted: ReadWrite<u32, Configuration::Register>),
+        (0x1D0 => publish_txstarted: ReadWrite<u32, DPPIConfig::Register>),
         (0x1D4 => _reserved15),
         /// Publish configuration for event TXSTOPPED
-        (0x1D8 => publish_txstopped: ReadWrite<u32, Configuration::Register>),
+        (0x1D8 => publish_txstopped: ReadWrite<u32, DPPIConfig::Register>),
         (0x1DC => _reserved16),
         /// Shortcuts between local events and tasks
         (0x200 => shorts: ReadWrite<u32, Shorts::Register>),
@@ -163,8 +163,8 @@ register_bitfields! [u32,
         ENABLE OFFSET(0) NUMBITS(1)
     ],
 
-    /// Configuration register
-    Configuration [
+    /// DPPI configuration register
+    DPPIConfig [
         CHIDX OFFSET(0) NUMBITS(8),
         ENABLE OFFSET(31) NUMBITS(1)
     ],

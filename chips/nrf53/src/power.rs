@@ -30,9 +30,9 @@ register_structs! {
         (0x07C => task_lowpwr: WriteOnly<u32, Task::Register>),
         (0x080 => _reserved1),
         /// Subscribe configuration for Constant Latency mode
-        (0x0F8 => subscribe_constlat: ReadWrite<u32, Configuration::Register>),
+        (0x0F8 => subscribe_constlat: ReadWrite<u32, DPPIConfig::Register>),
         /// Subscribe configuration for Low-power mode
-        (0x0FC => subscribe_lowpwr: ReadWrite<u32, Configuration::Register>),
+        (0x0FC => subscribe_lowpwr: ReadWrite<u32, DPPIConfig::Register>),
         (0x100 => _reserved2),
         /// Power failure warning
         (0x108 => event_pofwarn: ReadWrite<u32, Event::Register>),
@@ -43,12 +43,12 @@ register_structs! {
         (0x118 => event_sleepexit: ReadWrite<u32, Event::Register>),
         (0x11C => _reserved4),
         /// Publish configuration for power failure warning event
-        (0x188 => publish_pofwarn: ReadWrite<u32, Configuration::Register>),
+        (0x188 => publish_pofwarn: ReadWrite<u32, DPPIConfig::Register>),
         (0x18C => _reserved5),
         /// Publish configuration for sleep enter event
-        (0x194 => publish_sleepenter: ReadWrite<u32, Configuration::Register>),
+        (0x194 => publish_sleepenter: ReadWrite<u32, DPPIConfig::Register>),
         /// Publish configuration for sleep exit event
-        (0x198 => publish_sleepexit: ReadWrite<u32, Configuration::Register>),
+        (0x198 => publish_sleepexit: ReadWrite<u32, DPPIConfig::Register>),
         (0x19C => _reserved6),
         /// Enable or disable interrupt
         (0x300 => inten: ReadWrite<u32, Interrupt::Register>),
@@ -96,9 +96,9 @@ register_structs! {
         (0x07C => task_lowpwr: WriteOnly<u32, Task::Register>),
         (0x080 => _reserved1),
         /// Subscribe configuration for Constant Latency mode
-        (0x0F8 => subscribe_constlat: ReadWrite<u32, Configuration::Register>),
+        (0x0F8 => subscribe_constlat: ReadWrite<u32, DPPIConfig::Register>),
         /// Subscribe configuration for Low-power mode
-        (0x0FC => subscribe_lowpwr: ReadWrite<u32, Configuration::Register>),
+        (0x0FC => subscribe_lowpwr: ReadWrite<u32, DPPIConfig::Register>),
         (0x100 => _reserved2),
         /// Power failure warning
         (0x108 => event_pofwarn: ReadWrite<u32, Event::Register>),
@@ -109,12 +109,12 @@ register_structs! {
         (0x118 => event_sleepexit: ReadWrite<u32, Event::Register>),
         (0x11C => _reserved4),
         /// Publish configuration for power failure warning event
-        (0x188 => publish_pofwarn: ReadWrite<u32, Configuration::Register>),
+        (0x188 => publish_pofwarn: ReadWrite<u32, DPPIConfig::Register>),
         (0x18C => _reserved5),
         /// Publish configuration for sleep enter event
-        (0x194 => publish_sleepenter: ReadWrite<u32, Configuration::Register>),
+        (0x194 => publish_sleepenter: ReadWrite<u32, DPPIConfig::Register>),
         /// Publish configuration for sleep exit event
-        (0x198 => publish_sleepexit: ReadWrite<u32, Configuration::Register>),
+        (0x198 => publish_sleepexit: ReadWrite<u32, DPPIConfig::Register>),
         (0x19C => _reserved6),
         /// Enable or disable interrupt
         (0x300 => inten: ReadWrite<u32, Interrupt::Register>),
@@ -154,8 +154,8 @@ register_bitfields! [u32,
         READY OFFSET(0) NUMBITS(1)
     ],
 
-    /// Configuration for tasks and events
-    Configuration [
+    /// DPPI configuration for tasks and events
+    DPPIConfig [
         CHIDX OFFSET(0) NUMBITS(8),
         ENABLE OFFSET(31) NUMBITS(1)
     ],

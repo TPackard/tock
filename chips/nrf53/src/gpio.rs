@@ -46,23 +46,23 @@ register_structs! {
         /// Task for writing to pin specified in config\[n\].PSEL. Action on pin is to set it low.
         (0x060 => tasks_clr: [WriteOnly<u32, Task::Register>; NUM_GPIOTE]),
         /// Subscribe configuration for task tasks_out\[n\].
-        (0x080 => subscribe_out: [ReadWrite<u32, Configuration::Register>; NUM_GPIOTE]),
+        (0x080 => subscribe_out: [ReadWrite<u32, DPPIConfig::Register>; NUM_GPIOTE]),
         (0x0A0 => _reserved3),
         /// Subscribe configuration for task tasks_set\[n\].
-        (0x0B0 => subscribe_set: [ReadWrite<u32, Configuration::Register>; NUM_GPIOTE]),
+        (0x0B0 => subscribe_set: [ReadWrite<u32, DPPIConfig::Register>; NUM_GPIOTE]),
         (0x0D0 => _reserved4),
         /// Subscribe configuration for task tasks_clr\[n\].
-        (0x0E0 => subscribe_clr: [ReadWrite<u32, Configuration::Register>; NUM_GPIOTE]),
+        (0x0E0 => subscribe_clr: [ReadWrite<u32, DPPIConfig::Register>; NUM_GPIOTE]),
         /// Event generated from pin specified in config\[n\].PSEL.
         (0x100 => events_in: [ReadWrite<u32, Event::Register>; NUM_GPIOTE]),
         (0x120 => _reserved5),
         /// Event generated from multiple input GPIO pins with SENSE mechanism enabled.
         (0x17C => events_port: ReadWrite<u32, Event::Register>),
         /// Publish configuration for event events_in.
-        (0x180 => publish_in: [ReadWrite<u32, Configuration::Register>; NUM_GPIOTE]),
+        (0x180 => publish_in: [ReadWrite<u32, DPPIConfig::Register>; NUM_GPIOTE]),
         (0x1A0 => _reserved6),
         /// Publish configuration for event events_port.
-        (0x1FC => publish_port: ReadWrite<u32, Configuration::Register>),
+        (0x1FC => publish_port: ReadWrite<u32, DPPIConfig::Register>),
         (0x200 => _reserved7),
         /// Enable interrupts.
         (0x304 => intenset: ReadWrite<u32, Interrupt::Register>),
@@ -118,7 +118,7 @@ register_bitfields! [u32,
         READY OFFSET(0) NUMBITS(1)
     ],
 
-    Configuration [
+    DPPIConfig [
         CHIDX OFFSET(0) NUMBITS(8),
         ENABLE OFFSET(31) NUMBITS(1)
     ],

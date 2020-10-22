@@ -1,6 +1,6 @@
 use capsules::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use kernel::debug;
-use kernel::hil::gpio::{Client, Configure, Input, Interrupt, InterruptEdge, Output};
+use kernel::hil::gpio::{Client, Configure, Interrupt, InterruptEdge, Output};
 use kernel::hil::time::{Alarm, AlarmClient, Frequency};
 use kernel::static_init;
 use nrf53::gpio;
