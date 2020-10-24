@@ -312,6 +312,16 @@ pub unsafe fn reset_handler() {
     // Create the debugger object that handles calls to `debug!()`.
     components::debug_writer::DebugWriterComponent::new(uart_mux).finalize(());
 
+    // SPI
+    let mux_spi = components::spi::SpiMuxComponent::new(&nrf53::spi::SPIM1)
+        .finalize(components::spi_mux_component_helper!(nrf53::spi::SPIM));
+
+    nrf53::spi::SPIM1.configure(
+        nrf53::pinmux::Pinmux::new(Pin::P1_00 as u32),
+        nrf53::pinmux::Pinmux::new(Pin::P1_01 as u32),
+        nrf53::pinmux::Pinmux::new(Pin::P1_02 as u32),
+    );
+
     // Start all of the clocks. Low power operation will require a better
     // approach than this.
     nrf53::clock::CLOCK.low_stop();
@@ -340,8 +350,8 @@ pub unsafe fn reset_handler() {
 
     // Run optional kernel tests.
     //
-    tests::blink::run(mux_alarm, LED4_PIN, BUTTON4_PIN);
-    //tests::button::run(BUTTON4_PIN);
+    //tests::blink::run(mux_alarm, LED4_PIN, BUTTON4_PIN);
+    tests::spi::run(mux_spi, &nrf53::gpio::PORT.pins[35], LED4_PIN, BUTTON4_PIN);
 
     /// These symbols are defined in the linker script.
     extern "C" {

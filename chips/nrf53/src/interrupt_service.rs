@@ -1,6 +1,7 @@
 use crate::gpio;
 use crate::power;
 use crate::rtc;
+use crate::spi;
 use crate::uart;
 use crate::peripheral_interrupts;
 
@@ -68,6 +69,8 @@ impl InterruptService for Nrf53InterruptService<'_> {
             peripheral_interrupts::POWER => power::POWER.handle_interrupt(),
             peripheral_interrupts::RTC0 => rtc::RTC.handle_interrupt(),
             peripheral_interrupts::UARTE0 => uart::UARTE0.handle_interrupt(),
+            peripheral_interrupts::SPIM1 => spi::SPIM1.handle_interrupt(),
+            //peripheral_interrupts::SPIS2 => spi::SPIS2.handle_interrupt(),
             _ => return false,
         }
         true

@@ -38,12 +38,8 @@ use kernel::hil;
 use kernel::ReturnCode;
 use crate::pinmux::Pinmux;
 
-/// SPI master instance 0.
-pub static mut SPIM0: SPIM = SPIM::new(0);
 /// SPI master instance 1.
 pub static mut SPIM1: SPIM = SPIM::new(1);
-/// SPI master instance 2.
-pub static mut SPIM2: SPIM = SPIM::new(2);
 
 const SECURE_INSTANCES: [StaticRef<SpimRegisters>; 5] = unsafe {
     [
