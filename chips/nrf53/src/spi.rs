@@ -34,117 +34,135 @@ use core::cmp;
 use kernel::common::cells::{OptionalCell, TakeCell};
 use kernel::common::registers::{register_bitfields, register_structs, ReadWrite, WriteOnly};
 use kernel::common::StaticRef;
+use kernel::debug;
 use kernel::hil;
 use kernel::ReturnCode;
 use crate::pinmux::Pinmux;
 
-/// SPI master instance 1.
-pub static mut SPIM1: SPIM = SPIM::new(1);
+/// SPI instance 1.
+pub static mut SPI1: SPI = SPI::new(1);
 
-const SECURE_INSTANCES: [StaticRef<SpimRegisters>; 5] = unsafe {
+const SECURE_INSTANCES: [StaticRef<SpiRegisters>; 5] = unsafe {
     [
-        StaticRef::new(0x50008000 as *const SpimRegisters),
-        StaticRef::new(0x50009000 as *const SpimRegisters),
-        StaticRef::new(0x5000B000 as *const SpimRegisters),
-        StaticRef::new(0x5000C000 as *const SpimRegisters),
-        StaticRef::new(0x5000A000 as *const SpimRegisters),
+        StaticRef::new(0x50008000 as *const SpiRegisters),
+        StaticRef::new(0x50009000 as *const SpiRegisters),
+        StaticRef::new(0x5000B000 as *const SpiRegisters),
+        StaticRef::new(0x5000C000 as *const SpiRegisters),
+        StaticRef::new(0x5000A000 as *const SpiRegisters),
     ]
 };
 
 #[allow(dead_code)]
-const NONSECURE_INSTANCES: [StaticRef<SpimRegisters>; 5] = unsafe {
+const NONSECURE_INSTANCES: [StaticRef<SpiRegisters>; 5] = unsafe {
     [
-        StaticRef::new(0x40008000 as *const SpimRegisters),
-        StaticRef::new(0x40009000 as *const SpimRegisters),
-        StaticRef::new(0x4000B000 as *const SpimRegisters),
-        StaticRef::new(0x4000C000 as *const SpimRegisters),
-        StaticRef::new(0x4000A000 as *const SpimRegisters),
+        StaticRef::new(0x40008000 as *const SpiRegisters),
+        StaticRef::new(0x40009000 as *const SpiRegisters),
+        StaticRef::new(0x4000B000 as *const SpiRegisters),
+        StaticRef::new(0x4000C000 as *const SpiRegisters),
+        StaticRef::new(0x4000A000 as *const SpiRegisters),
     ]
 };
 
 #[allow(dead_code)]
-const SPIM0_BASE_NETWORK: StaticRef<SpimRegisters> =
-    unsafe { StaticRef::new(0x41013000 as *const SpimRegisters) };
+const SPI0_BASE_NETWORK: StaticRef<SpiRegisters> =
+    unsafe { StaticRef::new(0x41013000 as *const SpiRegisters) };
 
 register_structs! {
-    SpimRegisters {
+    SpiRegisters {
         (0x000 => _reserved0),
         /// Start SPI transaction
-        (0x010 => task_start: WriteOnly<u32, Task::Register>),
+        (0x010 => spim_task_start: WriteOnly<u32, Task::Register>),
         /// Stop SPI transaction
-        (0x014 => task_stop: WriteOnly<u32, Task::Register>),
+        (0x014 => spim_task_stop: WriteOnly<u32, Task::Register>),
         (0x018 => _reserved1),
         /// Suspend SPI transaction
-        (0x01C => task_suspend: WriteOnly<u32, Task::Register>),
+        (0x01C => spim_task_suspend: WriteOnly<u32, Task::Register>),
         /// Resume SPI transaction
-        (0x020 => task_resume: WriteOnly<u32, Task::Register>),
-        (0x024 => _reserved2),
+        (0x020 => spim_task_resume: WriteOnly<u32, Task::Register>),
+        /// Acquire SPI semaphore
+        (0x024 => spis_task_acquire: WriteOnly<u32, Task::Register>),
+        /// Release SPI semaphore, enabling the SPIS to acquire it
+        (0x028 => spis_task_release: WriteOnly<u32, Task::Register>),
+        (0x02C => _reserved2),
         /// Subscribe configuration for task START
-        (0x090 => subscribe_start: WriteOnly<u32, DPPIConfig::Register>),
+        (0x090 => spim_subscribe_start: WriteOnly<u32, DPPIConfig::Register>),
         /// Subscribe configuration for task STOP
-        (0x094 => subscribe_stop: WriteOnly<u32, DPPIConfig::Register>),
+        (0x094 => spim_subscribe_stop: WriteOnly<u32, DPPIConfig::Register>),
         (0x098 => _reserved3),
         /// Subscribe configuration for task SUSPEND
-        (0x09C => subscribe_suspend: WriteOnly<u32, DPPIConfig::Register>),
+        (0x09C => spim_subscribe_suspend: WriteOnly<u32, DPPIConfig::Register>),
         /// Subscribe configuration for task RESUME
-        (0x0A0 => subscribe_resume: WriteOnly<u32, DPPIConfig::Register>),
-        (0x0A4 => _reserved4),
-        /// SPI transaction has stopped
-        (0x104 => event_stopped: ReadWrite<u32, Event::Register>),
+        (0x0A0 => spim_subscribe_resume: WriteOnly<u32, DPPIConfig::Register>),
+        /// Subscribe  configuration for task ACQUIRE
+        (0x0A4 => spis_subscribe_acquire: WriteOnly<u32, DPPIConfig::Register>),
+        /// Subscribe configuration for task RELASE
+        (0x0A8 => spis_subscribe_release: WriteOnly<u32, DPPIConfig::Register>),
+        (0x0AC => _reserved4),
+        /// SPIM transaction has stopped/SPIS granted transaction completed
+        (0x104 => event_endstopped: ReadWrite<u32, Event::Register>),
         (0x108 => _reserved5),
         /// End of RXD buffer reached
         (0x110 => event_endrx: ReadWrite<u32, Event::Register>),
         (0x114 => _reserved6),
         /// End of RXD buffer and TXD buffer reached
-        (0x118 => event_end: ReadWrite<u32, Event::Register>),
+        (0x118 => spim_event_end: ReadWrite<u32, Event::Register>),
         (0x11C => _reserved7),
         /// End of TXD buffer reached
-        (0x120 => event_endtx: ReadWrite<u32, Event::Register>),
+        (0x120 => spim_event_endtx: ReadWrite<u32, Event::Register>),
         (0x124 => _reserved8),
+        /// Semaphore acquired
+        (0x128 => spis_event_acquired: ReadWrite<u32, Event::Register>),
+        (0x12C => _reserved9),
         /// Transaction started
-        (0x14C => event_started: ReadWrite<u32, Event::Register>),
-        (0x150 => _reserved9),
-        /// Publish configuration for event STOPPED
-        (0x184 => publish_stopped: ReadWrite<u32, DPPIConfig::Register>),
-        (0x188 => _reserved10),
+        (0x14C => spim_event_started: ReadWrite<u32, Event::Register>),
+        (0x150 => _reserved10),
+        /// Publish configuration for SPIM event STOPPED/SPIS event END
+        (0x184 => publish_endstopped: ReadWrite<u32, DPPIConfig::Register>),
+        (0x188 => _reserved11),
         /// Publish configuration for event ENDRX
         (0x190 => publish_endrx: ReadWrite<u32, DPPIConfig::Register>),
-        (0x194 => _reserved11),
+        (0x194 => _reserved12),
         /// Publish configuration for event END
-        (0x198 => publish_end: ReadWrite<u32, DPPIConfig::Register>),
-        (0x19C => _reserved12),
+        (0x198 => spim_publish_end: ReadWrite<u32, DPPIConfig::Register>),
+        (0x19C => _reserved13),
         /// Publish configuration for event ENDTX
-        (0x1A0 => publish_endtx: ReadWrite<u32, DPPIConfig::Register>),
-        (0x1A4 => _reserved13),
+        (0x1A0 => spim_publish_endtx: ReadWrite<u32, DPPIConfig::Register>),
+        (0x1A4 => _reserved14),
+        /// Publish configuration for event ACQUIRED
+        (0x1A8 => spis_publish_acquired: ReadWrite<u32, DPPIConfig::Register>),
+        (0x1AC => _reserved15),
         /// Publish configuration for event STARTED
-        (0x1CC => publish_started: ReadWrite<u32, DPPIConfig::Register>),
-        (0x1D0 => _reserved14),
+        (0x1CC => spim_publish_started: ReadWrite<u32, DPPIConfig::Register>),
+        (0x1D0 => _reserved16),
         /// Shortcuts between local events and tasks
         (0x200 => shorts: ReadWrite<u32, Shorts::Register>),
-        (0x204 => _reserved15),
+        (0x204 => _reserved17),
         /// Enable interrupt
         (0x304 => intenset: ReadWrite<u32, Interrupt::Register>),
         /// Disable interrupt
         (0x308 => intenclr: ReadWrite<u32, Interrupt::Register>),
-        (0x30C => _reserved16),
-        /// Stall status for EasyDMA RAM accesses
-        (0x400 => stallstat: ReadWrite<u32, Stallstat::Register>),
-        (0x404 => _reserved17),
-        /// Enable SPIM
-        (0x500 => enable: ReadWrite<u32, Spim::Register>),
-        (0x504 => _reserved18),
+        (0x30C => _reserved18),
+        /// SPIM stall status for EasyDMA RAM accesses/SPIS semaphore status
+        (0x400 => stat: ReadWrite<u32, Stat::Register>),
+        (0x404 => _reserved19),
+        /// Status from last transaction
+        (0x440 => spis_status: ReadWrite<u32, Status::Register>),
+        (0x444 => _reserved20),
+        /// Enable SPI
+        (0x500 => enable: ReadWrite<u32, Spi::Register>),
+        (0x504 => _reserved21),
         /// Pin select for SCK
         (0x508 => psel_sck: ReadWrite<u32, Psel::Register>),
-        /// Pin select for MOSI signal
-        (0x50C => psel_mosi: ReadWrite<u32, Psel::Register>),
-        /// Pin select for MISO signal
-        (0x510 => psel_miso: ReadWrite<u32, Psel::Register>),
+        /// Pin select for output signal (SPIM MOSI signal or SPIS MISO signal)
+        (0x50C => psel_output: ReadWrite<u32, Psel::Register>),
+        /// Pin select for input signal (SPIM MISO signal or SPIS MISO signal)
+        (0x510 => psel_input: ReadWrite<u32, Psel::Register>),
         /// Pin select for CSN
         (0x514 => psel_csn: ReadWrite<u32, Psel::Register>),
-        (0x518 => _reserved19),
+        (0x518 => _reserved22),
         /// SPI frequency
-        (0x524 => frequency: ReadWrite<u32, Freq::Register>),
-        (0x528 => _reserved20),
+        (0x524 => spim_frequency: ReadWrite<u32, Freq::Register>),
+        (0x528 => _reserved23),
         /// Data pointer
         (0x534 => rxd_ptr: ReadWrite<u32, Pointer::Register>),
         /// Maximum number of bytes in receive buffer
@@ -163,19 +181,21 @@ register_structs! {
         (0x550 => txd_list: ReadWrite<u32, List::Register>),
         /// Configuration register
         (0x554 => config: ReadWrite<u32, Config::Register>),
-        (0x558 => _reserved21),
+        (0x558 => _reserved24),
+        /// Default character clocked out in case of an ignored transaction
+        (0x55C => spis_def: ReadWrite<u32, Def::Register>),
         /// Sample delay for input serial data on MISO
-        (0x560 => iftiming_rxdelay: ReadWrite<u32, Rxdelay::Register>),
+        (0x560 => spim_iftiming_rxdelay: ReadWrite<u32, Rxdelay::Register>),
         /// Minimum duration between edge of CSN and edge of SCK and minimum
         /// duration CSN must stay high between transactions
-        (0x564 => iftiming_csndur: ReadWrite<u32, Csndur::Register>),
+        (0x564 => spim_iftiming_csndur: ReadWrite<u32, Csndur::Register>),
         /// Polarity of CSN output
-        (0x568 => csnpol: ReadWrite<u32, Polarity::Register>),
+        (0x568 => spim_csnpol: ReadWrite<u32, Polarity::Register>),
         /// Pin select for DCX signal
-        (0x56C => pseldcx: ReadWrite<u32, Psel::Register>),
+        (0x56C => spim_pseldcx: ReadWrite<u32, Psel::Register>),
         /// DCX configuration
-        (0x570 => dcxcnt: ReadWrite<u32, Dcxcnt::Register>),
-        (0x574 => _reserved22),
+        (0x570 => spim_dcxcnt: ReadWrite<u32, Dcxcnt::Register>),
+        (0x574 => _reserved25),
         /// Byte transmitted after TXD.MAXCNT bytes have been transmitted in the
         /// case when RXD.MAXCNT is greater than TXD.MAXCNT
         (0x5C0 => orc: ReadWrite<u32, Orc::Register>),
@@ -202,37 +222,47 @@ register_bitfields![u32,
 
     /// Shortcuts between local events and tasks
     Shorts [
+        END_ACQUIRE OFFSET(2) NUMBITS(1),
         END_START OFFSET(17) NUMBITS(1)
     ],
 
     /// Interrupt configuration
     Interrupt [
-        STOPPED OFFSET(1) NUMBITS(1),
+        ENDSTOPPED OFFSET(1) NUMBITS(1),
         ENDRX OFFSET(4) NUMBITS(1),
         END OFFSET(6) NUMBITS(1),
         ENDTX OFFSET(8) NUMBITS(1),
+        ACQUIRED OFFSET(10) NUMBITS(1),
         STARTED OFFSET(19) NUMBITS(1)
     ],
 
-    /// Stall status for EasyDMA RAM accesses. The fields in this register are
+    /// SPIM: Stall status for EasyDMA RAM accesses. The fields in this register are
     /// set to STALL by hardware whenever a stall occurs and can be cleared
     /// (set to NOSTALL) by the CPU.
-    Stallstat [
-        TX OFFSET(0) NUMBITS(1) [
-            NOSTALL = 0,
-            STALL = 1
+    ///
+    /// SPIS: Semaphore status register.
+    Stat [
+        STATUS OFFSET(0) NUMBITS(2)
+    ],
+
+    /// Status from last transaction
+    Status [
+        OVERREAD OFFSET(0) NUMBITS(1) [
+            NotPresent = 0,
+            Present = 1
         ],
-        RX OFFSET(1) NUMBITS(1) [
-            NOSTALL = 0,
-            STALL = 1
+        OVERFLOW OFFSET(1) NUMBITS(1) [
+            NotPresent = 0,
+            Present = 1
         ]
     ],
 
-    /// Enable SPIM
-    Spim [
+    /// Enable SPI
+    Spi [
         ENABLE OFFSET(0) NUMBITS(4) [
             Disabled = 0,
-            Enabled = 7
+            SpisEnabled = 2,
+            SpimEnabled = 7
         ]
     ],
 
@@ -294,6 +324,11 @@ register_bitfields![u32,
             ActiveHigh = 0,
             ActiveLow = 1
         ]
+    ],
+
+    /// Default character clocked out in case of an ignored transaction
+    Def [
+        DEF OFFSET(0) NUMBITS(8)
     ],
 
     /// Sample delay for input  serial data on MISO
@@ -406,13 +441,22 @@ impl Frequency {
     }
 }
 
-/// A SPI master device.
+/// Whether the SPI peripheral is acting as SPIM or SPIS.
+#[derive(Copy, Clone, PartialEq)]
+pub enum SpiRole {
+    SPIM,
+    SPIS,
+}
+
+/// A SPI device.
 ///
-/// A `SPIM` instance wraps a `registers::spim::SPIM` together with
+/// A `SPI` instance wraps a `registers::spi::SPI` together with
 /// addition data necessary to implement an asynchronous interface.
-pub struct SPIM {
-    registers: StaticRef<SpimRegisters>,
-    client: OptionalCell<&'static dyn hil::spi::SpiMasterClient>,
+pub struct SPI {
+    registers: StaticRef<SpiRegisters>,
+    role: Cell<SpiRole>,
+    spim_client: OptionalCell<&'static dyn hil::spi::SpiMasterClient>,
+    spis_client: OptionalCell<&'static dyn hil::spi::SpiSlaveClient>,
     chip_select: OptionalCell<&'static dyn hil::gpio::Pin>,
     initialized: Cell<bool>,
     busy: Cell<bool>,
@@ -421,11 +465,13 @@ pub struct SPIM {
     transfer_len: Cell<usize>,
 }
 
-impl SPIM {
-    const fn new(instance: usize) -> SPIM {
-        SPIM {
+impl SPI {
+    const fn new(instance: usize) -> SPI {
+        SPI {
             registers: SECURE_INSTANCES[instance],
-            client: OptionalCell::empty(),
+            role: Cell::new(SpiRole::SPIM),
+            spim_client: OptionalCell::empty(),
+            spis_client: OptionalCell::empty(),
             chip_select: OptionalCell::empty(),
             initialized: Cell::new(false),
             busy: Cell::new(false),
@@ -435,9 +481,8 @@ impl SPIM {
         }
     }
 
-    #[inline(never)]
-    pub fn handle_interrupt(&self) {
-        if self.registers.event_end.is_set(Event::READY) {
+    fn handle_spim_interrupt(&self) {
+        if self.registers.spim_event_end.is_set(Event::READY) {
             // End of RXD buffer and TXD buffer reached
 
             if self.chip_select.is_none() {
@@ -446,9 +491,9 @@ impl SPIM {
             }
 
             self.chip_select.map(|cs| cs.set());
-            self.registers.event_end.write(Event::READY::CLEAR);
+            self.registers.spim_event_end.write(Event::READY::CLEAR);
 
-            self.client.map(|client| match self.tx_buf.take() {
+            self.spim_client.map(|client| match self.tx_buf.take() {
                 None => (),
                 Some(tx_buf) => {
                     client.read_write_done(tx_buf, self.rx_buf.take(), self.transfer_len.take())
@@ -462,9 +507,9 @@ impl SPIM {
         // above 'end' event, the other event fields also get set by
         // the chip. Let's clear those flags.
 
-        if self.registers.event_stopped.is_set(Event::READY) {
+        if self.registers.event_endstopped.is_set(Event::READY) {
             // SPI transaction has stopped
-            self.registers.event_stopped.write(Event::READY::CLEAR);
+            self.registers.event_endstopped.write(Event::READY::CLEAR);
         }
 
         if self.registers.event_endrx.is_set(Event::READY) {
@@ -472,45 +517,135 @@ impl SPIM {
             self.registers.event_endrx.write(Event::READY::CLEAR);
         }
 
-        if self.registers.event_endtx.is_set(Event::READY) {
+        if self.registers.spim_event_endtx.is_set(Event::READY) {
             // End of TXD buffer reached
-            self.registers.event_endtx.write(Event::READY::CLEAR);
+            self.registers.spim_event_endtx.write(Event::READY::CLEAR);
         }
 
-        if self.registers.event_started.is_set(Event::READY) {
+        if self.registers.spim_event_started.is_set(Event::READY) {
             // Transaction started
-            self.registers.event_started.write(Event::READY::CLEAR);
+            self.registers.spim_event_started.write(Event::READY::CLEAR);
         }
     }
 
-    /// Configures an already constructed `SPIM`.
-    pub fn configure(&self, mosi: Pinmux, miso: Pinmux, sck: Pinmux) {
-        self.registers.psel_mosi.write(Psel::PIN.val(mosi.into()));
-        self.registers.psel_miso.write(Psel::PIN.val(miso.into()));
+    fn handle_spis_interrupt(&self) {
+        if self.registers.spis_event_acquired.is_set(Event::READY) {
+            // Semaphore acquired by CPU, occurs once transaction is complete
+            // due to END_ACQUIRE shortcut.
+
+            self.registers.spis_event_acquired.write(Event::READY::CLEAR);
+
+            self.spis_client.map(|client| {
+                client.read_write_done(self.tx_buf.take(), self.rx_buf.take(), self.transfer_len.take())
+            });
+
+            self.busy.set(false);
+        }
+
+        // Although we only configured the chip interrupt on the
+        // above 'acquired' event, the other event fields also get set by
+        // the chip. Let's clear those flags.
+
+        if self.registers.event_endstopped.is_set(Event::READY) {
+            // SPIS transaction has ended
+            self.registers.event_endstopped.write(Event::READY::CLEAR);
+        }
+
+        if self.registers.event_endrx.is_set(Event::READY) {
+            // End of RXD buffer reached
+            self.registers.event_endrx.write(Event::READY::CLEAR);
+        }
+    }
+
+    #[inline(never)]
+    pub fn handle_interrupt(&self) {
+        match self.role.get() {
+            SpiRole::SPIM => self.handle_spim_interrupt(),
+            SpiRole::SPIS => self.handle_spis_interrupt(),
+        }
+    }
+
+    /// Configures an already constructed `SPI`.
+    pub fn configure(&self, mosi: Pinmux, miso: Pinmux, sck: Pinmux, csn: Pinmux, role: SpiRole) {
+        match role {
+            SpiRole::SPIM => {
+                self.registers.psel_output.write(Psel::PIN.val(mosi.into()));
+                self.registers.psel_input.write(Psel::PIN.val(miso.into()));
+            }
+            SpiRole::SPIS => {
+                self.registers.psel_input.write(Psel::PIN.val(mosi.into()));
+                self.registers.psel_output.write(Psel::PIN.val(miso.into()));
+            }
+        }
+
         self.registers.psel_sck.write(Psel::PIN.val(sck.into()));
-        self.enable();
+        self.registers.psel_csn.write(Psel::PIN.val(csn.into()));
+
+        self.enable(role);
     }
 
-    /// Enables `SPIM` peripheral.
-    pub fn enable(&self) {
-        self.registers.enable.write(Spim::ENABLE::Enabled);
+    /// Enables `SPI` peripheral.
+    pub fn enable(&self, role: SpiRole) {
+        match role {
+            SpiRole::SPIM => self.registers.enable.write(Spi::ENABLE::SpimEnabled),
+            SpiRole::SPIS => self.registers.enable.write(Spi::ENABLE::SpisEnabled),
+        }
+
+        self.role.set(role);
     }
 
-    /// Disables `SPIM` peripheral.
+    /// Disables `SPI` peripheral.
     pub fn disable(&self) {
-        self.registers.enable.write(Spim::ENABLE::Disabled);
+        self.registers.enable.write(Spi::ENABLE::Disabled);
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.registers.enable.matches_all(Spim::ENABLE::Enabled)
+        !self.registers.enable.matches_all(Spi::ENABLE::Disabled)
+    }
+
+    fn set_clock(&self, polarity: hil::spi::ClockPolarity) {
+        debug_assert!(self.initialized.get());
+        debug_assert!(self.initialized.get());
+        let new_polarity = match polarity {
+            hil::spi::ClockPolarity::IdleLow => Config::CPOL::ActiveHigh,
+            hil::spi::ClockPolarity::IdleHigh => Config::CPOL::ActiveLow,
+        };
+        self.registers.config.modify(new_polarity);
+    }
+
+    fn get_clock(&self) -> hil::spi::ClockPolarity {
+        debug_assert!(self.initialized.get());
+        match self.registers.config.read(Config::CPOL) {
+            0 => hil::spi::ClockPolarity::IdleLow,
+            1 => hil::spi::ClockPolarity::IdleHigh,
+            _ => unreachable!(),
+        }
+    }
+
+    fn set_phase(&self, phase: hil::spi::ClockPhase) {
+        debug_assert!(self.initialized.get());
+        let new_phase = match phase {
+            hil::spi::ClockPhase::SampleLeading => Config::CPHA::Leading,
+            hil::spi::ClockPhase::SampleTrailing => Config::CPHA::Trailing,
+        };
+        self.registers.config.modify(new_phase);
+    }
+
+    fn get_phase(&self) -> hil::spi::ClockPhase {
+        debug_assert!(self.initialized.get());
+        match self.registers.config.read(Config::CPHA) {
+            0 => hil::spi::ClockPhase::SampleLeading,
+            1 => hil::spi::ClockPhase::SampleTrailing,
+            _ => unreachable!(),
+        }
     }
 }
 
-impl hil::spi::SpiMaster for SPIM {
+impl hil::spi::SpiMaster for SPI {
     type ChipSelect = &'static dyn hil::gpio::Pin;
 
     fn set_client(&self, client: &'static dyn hil::spi::SpiMasterClient) {
-        self.client.set(client);
+        self.spim_client.set(client);
     }
 
     fn init(&self) {
@@ -564,23 +699,23 @@ impl hil::spi::SpiMaster for SPIM {
 
         // Start the transfer
         self.busy.set(true);
-        self.registers.task_start.write(Task::ENABLE::SET);
+        self.registers.spim_task_start.write(Task::ENABLE::SET);
         ReturnCode::SUCCESS
     }
 
     fn write_byte(&self, _val: u8) {
         debug_assert!(self.initialized.get());
-        unimplemented!("SPI: Use `read_write_bytes()` instead.");
+        unimplemented!("SPIM: Use `read_write_bytes()` instead.");
     }
 
     fn read_byte(&self) -> u8 {
         debug_assert!(self.initialized.get());
-        unimplemented!("SPI: Use `read_write_bytes()` instead.");
+        unimplemented!("SPIM: Use `read_write_bytes()` instead.");
     }
 
     fn read_write_byte(&self, _val: u8) -> u8 {
         debug_assert!(self.initialized.get());
-        unimplemented!("SPI: Use `read_write_bytes()` instead.");
+        unimplemented!("SPIM: Use `read_write_bytes()` instead.");
     }
 
     // Tell the SPI peripheral what to use as a chip select pin.
@@ -596,7 +731,7 @@ impl hil::spi::SpiMaster for SPIM {
     fn set_rate(&self, rate: u32) -> u32 {
         debug_assert!(self.initialized.get());
         let f = Frequency::from_spi_rate(rate);
-        self.registers.frequency.set(f as u32);
+        self.registers.spim_frequency.set(f as u32);
         f.into_spi_rate()
     }
 
@@ -605,56 +740,125 @@ impl hil::spi::SpiMaster for SPIM {
 
         // Reset value is a valid frequency (250kbps), so .expect
         // should be safe here
-        let f = Frequency::from_register(self.registers.frequency.get())
+        let f = Frequency::from_register(self.registers.spim_frequency.get())
             .expect("nrf53 unknown spi rate");
         f.into_spi_rate()
     }
 
     fn set_clock(&self, polarity: hil::spi::ClockPolarity) {
-        debug_assert!(self.initialized.get());
-        debug_assert!(self.initialized.get());
-        let new_polarity = match polarity {
-            hil::spi::ClockPolarity::IdleLow => Config::CPOL::ActiveHigh,
-            hil::spi::ClockPolarity::IdleHigh => Config::CPOL::ActiveLow,
-        };
-        self.registers.config.modify(new_polarity);
+        self.set_clock(polarity);
     }
 
     fn get_clock(&self) -> hil::spi::ClockPolarity {
-        debug_assert!(self.initialized.get());
-        match self.registers.config.read(Config::CPOL) {
-            0 => hil::spi::ClockPolarity::IdleLow,
-            1 => hil::spi::ClockPolarity::IdleHigh,
-            _ => unreachable!(),
-        }
+        self.get_clock()
     }
 
     fn set_phase(&self, phase: hil::spi::ClockPhase) {
-        debug_assert!(self.initialized.get());
-        let new_phase = match phase {
-            hil::spi::ClockPhase::SampleLeading => Config::CPHA::Leading,
-            hil::spi::ClockPhase::SampleTrailing => Config::CPHA::Trailing,
-        };
-        self.registers.config.modify(new_phase);
+        self.set_phase(phase);
     }
 
     fn get_phase(&self) -> hil::spi::ClockPhase {
-        debug_assert!(self.initialized.get());
-        match self.registers.config.read(Config::CPHA) {
-            0 => hil::spi::ClockPhase::SampleLeading,
-            1 => hil::spi::ClockPhase::SampleTrailing,
-            _ => unreachable!(),
-        }
+        self.get_phase()
     }
 
     // The following two trait functions are not implemented for
     // SAM4L, and appear to not provide much functionality. Let's not
     // bother implementing them unless needed.
     fn hold_low(&self) {
-        unimplemented!("SPI: Use `read_write_bytes()` instead.");
+        unimplemented!("SPIM: Use `read_write_bytes()` instead.");
     }
 
     fn release_low(&self) {
-        unimplemented!("SPI: Use `read_write_bytes()` instead.");
+        unimplemented!("SPIM: Use `read_write_bytes()` instead.");
+    }
+}
+
+impl hil::spi::SpiSlave for SPI {
+    fn init(&self) {
+        self.registers.intenset.write(Interrupt::ACQUIRED::SET);
+        self.registers.shorts.write(Shorts::END_ACQUIRE::SET);
+        self.initialized.set(true);
+    }
+
+    fn has_client(&self) -> bool {
+        !self.spis_client.is_none()
+    }
+
+    fn set_client(&self, client: Option<&'static dyn hil::spi::SpiSlaveClient>) {
+        self.spis_client.insert(client);
+    }
+
+    fn set_write_byte(&self, _val: u8) {
+        debug_assert!(self.initialized.get());
+        unimplemented!("SPIS: Use `read_write_bytes()` instead.");
+    }
+
+    fn read_write_bytes(
+        &self,
+        tx_buf: Option<&'static mut [u8]>,
+        rx_buf: Option<&'static mut [u8]>,
+        len: usize,
+    ) -> ReturnCode {
+        // Invariant: SPIS semaphore must be held by CPU.
+        debug_assert!(self.registers.stat.get() == 1);
+
+        // Setup transmit data registers
+        match tx_buf {
+            None => {
+                self.registers.txd_ptr.set(0);
+                self.registers.txd_maxcnt.write(Counter::COUNTER.val(0));
+                self.tx_buf.put(None);
+            }
+            Some(buf) => {
+                let tx_len: u32 = cmp::min(len, buf.len()) as u32;
+                self.registers.txd_ptr.set(buf.as_ptr() as u32);
+                self.registers.txd_maxcnt.write(Counter::COUNTER.val(tx_len));
+                self.tx_buf.put(Some(buf));
+            }
+        }
+
+        // Setup receive data registers
+        match rx_buf {
+            None => {
+                self.registers.rxd_ptr.set(0);
+                self.registers.rxd_maxcnt.write(Counter::COUNTER.val(0));
+                self.rx_buf.put(None);
+            }
+            Some(buf) => {
+                let rx_len: u32 = cmp::min(len, buf.len()) as u32;
+                self.registers.rxd_ptr.set(buf.as_mut_ptr() as u32);
+                self.registers.rxd_maxcnt.write(Counter::COUNTER.val(rx_len));
+                self.rx_buf.put(Some(buf));
+            }
+        }
+
+        // Start the transfer
+        self.busy.set(true);
+        self.registers.spis_task_release.write(Task::ENABLE::SET);
+        ReturnCode::SUCCESS
+    }
+
+    fn set_clock(&self, polarity: hil::spi::ClockPolarity) {
+        self.set_clock(polarity);
+    }
+
+    fn get_clock(&self) -> hil::spi::ClockPolarity {
+        self.get_clock()
+    }
+
+    fn set_phase(&self, phase: hil::spi::ClockPhase) {
+        self.set_phase(phase);
+    }
+
+    fn get_phase(&self) -> hil::spi::ClockPhase {
+        self.get_phase()
+    }
+}
+
+impl hil::gpio::Client for SPI {
+    fn fired(&self) {
+        self.spis_client.map(|client| {
+            client.chip_selected();
+        });
     }
 }

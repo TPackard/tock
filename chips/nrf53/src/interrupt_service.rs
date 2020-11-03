@@ -68,9 +68,9 @@ impl InterruptService for Nrf53InterruptService<'_> {
             peripheral_interrupts::GPIOTE0 => self.gpio_port.handle_interrupt(),
             peripheral_interrupts::POWER => power::POWER.handle_interrupt(),
             peripheral_interrupts::RTC0 => rtc::RTC.handle_interrupt(),
-            peripheral_interrupts::UARTE0 => uart::UARTE0.handle_interrupt(),
-            peripheral_interrupts::SPIM1 => spi::SPIM1.handle_interrupt(),
-            //peripheral_interrupts::SPIS2 => spi::SPIS2.handle_interrupt(),
+            // TODO: forward to proper peripheral
+            peripheral_interrupts::SPI_TWI_UARTE0 => uart::UARTE0.handle_interrupt(),
+            peripheral_interrupts::SPI_TWI_UARTE1 => spi::SPI1.handle_interrupt(),
             _ => return false,
         }
         true

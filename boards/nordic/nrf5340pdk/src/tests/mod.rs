@@ -1,2 +1,3 @@
 pub mod blink;
-pub mod spi;
+pub mod spim;
+pub mod spis;
