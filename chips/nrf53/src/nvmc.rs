@@ -24,6 +24,8 @@ const NVMC_BASE_NONSECURE: StaticRef<NvmcRegisters> =
 const NVMC_BASE_NETWORK: StaticRef<NvmcRegisters> =
     unsafe { StaticRef::new(0x41080000 as *const NvmcRegisters) };
 
+pub static mut NVMC_APP: Nvmc = Nvmc::new(NVMC_BASE_SECURE);
+
 register_structs! {
     NvmcRegisters {
         /// Ready flag
@@ -225,8 +227,6 @@ pub enum FlashState {
     Erase, // Performing an erase operation.
 }
 
-pub static mut NVMC: Nvmc = Nvmc::new();
-
 pub struct Nvmc {
     registers: StaticRef<NvmcRegisters>,
     client: OptionalCell<&'static dyn hil::flash::Client<Nvmc>>,
@@ -235,9 +235,9 @@ pub struct Nvmc {
 }
 
 impl Nvmc {
-    pub const fn new() -> Nvmc {
+    const fn new(registers: StaticRef<NvmcRegisters>) -> Nvmc {
         Nvmc {
-            registers: NVMC_BASE_SECURE,
+            registers,
             client: OptionalCell::empty(),
             buffer: TakeCell::empty(),
             state: Cell::new(FlashState::Ready),

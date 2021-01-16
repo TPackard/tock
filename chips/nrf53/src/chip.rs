@@ -1,33 +1,32 @@
 use crate::deferred_call_tasks::DeferredCallTask;
-use crate::gpio;
-use crate::interrupt_service::{InterruptService, Nrf53InterruptService};
+use crate::interrupt_service::InterruptService;
 use crate::nvmc;
 use core::fmt::Write;
 use cortexm33::{self, nvic};
 use kernel::common::deferred_call;
 use kernel::debug;
 
-pub struct NRF53 {
+pub struct NRF53<I: InterruptService> {
     mpu: cortexm33::mpu::MPU,
     userspace_kernel_boundary: cortexm33::syscall::SysCall,
     scheduler_timer: cortexm33::systick::SysTick,
-    interrupt_service: Nrf53InterruptService<'static>,
+    interrupt_service: I,
 }
 
-impl NRF53 {
-    pub unsafe fn new() -> NRF53 {
+impl<I: InterruptService> NRF53<I> {
+    pub unsafe fn new() -> NRF53<I> {
         NRF53 {
             mpu: cortexm33::mpu::MPU::new(),
             userspace_kernel_boundary: cortexm33::syscall::SysCall::new(),
             // The NRF53's systick is uncalibrated, but is clocked from the
             // 64Mhz CPU clock.
             scheduler_timer: cortexm33::systick::SysTick::new_with_calibration(64000000),
-            interrupt_service: Nrf53InterruptService::new(&gpio::PORT),
+            interrupt_service: I::new(),
         }
     }
 }
 
-impl kernel::Chip for NRF53 {
+impl<I: InterruptService> kernel::Chip for NRF53<I> {
     type MPU = cortexm33::mpu::MPU;
     type UserspaceKernelBoundary = cortexm33::syscall::SysCall;
     type SchedulerTimer = cortexm33::systick::SysTick;
@@ -54,7 +53,8 @@ impl kernel::Chip for NRF53 {
             loop {
                 if let Some(task) = deferred_call::DeferredCall::next_pending() {
                     match task {
-                        DeferredCallTask::Nvmc => nvmc::NVMC.handle_interrupt(),
+                        // TODO: don't do for network core
+                        DeferredCallTask::Nvmc => nvmc::NVMC_APP.handle_interrupt(),
                     }
                 } else if let Some(interrupt) = nvic::next_pending() {
                     if !self.interrupt_service.service_interrupt(interrupt) {

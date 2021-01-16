@@ -39,8 +39,8 @@ use kernel::hil;
 use kernel::ReturnCode;
 use crate::pinmux::Pinmux;
 
-/// SPI instance 1.
-pub static mut SPI1: SPI = SPI::new(1);
+pub static mut SPI1_APP: SPI = SPI::new(SECURE_INSTANCES[1]);
+pub static mut SPI0_NET: SPI = SPI::new(SPI0_BASE_NETWORK);
 
 const SECURE_INSTANCES: [StaticRef<SpiRegisters>; 5] = unsafe {
     [
@@ -466,9 +466,9 @@ pub struct SPI {
 }
 
 impl SPI {
-    const fn new(instance: usize) -> SPI {
+    const fn new(registers: StaticRef<SpiRegisters>) -> SPI {
         SPI {
-            registers: SECURE_INSTANCES[instance],
+            registers,
             role: Cell::new(SpiRole::SPIM),
             spim_client: OptionalCell::empty(),
             spis_client: OptionalCell::empty(),

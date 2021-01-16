@@ -41,7 +41,7 @@ impl IoWrite for Writer {
     fn write(&mut self, buf: &[u8]) {
         match self {
             Writer::WriterUart(ref mut initialized) => {
-                let uart = unsafe { &mut nrf53::uart::UARTE0 };
+                let uart = unsafe { &mut nrf53::uart::UARTE0_NET };
                 if !*initialized {
                     *initialized = true;
                     uart.configure(uart::Parameters {
@@ -87,8 +87,8 @@ impl IoWrite for Writer {
 #[panic_handler]
 /// Panic handler
 pub unsafe extern "C" fn panic_fmt(pi: &PanicInfo) -> ! {
-    const LED1_PIN: Pin = Pin::P0_28;
-    let led = &mut led::LedLow::new(&mut nrf53::gpio::PORT[LED1_PIN]);
+    const LED3_PIN: Pin = Pin::P0_30;
+    let led = &mut led::LedLow::new(&mut nrf53::gpio::PORT_NET[LED3_PIN]);
     let writer = &mut WRITER;
     debug::panic(
         &mut [led],

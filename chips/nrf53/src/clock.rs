@@ -22,6 +22,9 @@ use kernel::common::registers::{
 };
 use kernel::common::StaticRef;
 
+pub static mut CLOCK_APP: Clock = Clock::new(CLOCK_BASE_SECURE);
+pub static mut CLOCK_NET: Clock = Clock::new(CLOCK_BASE_NETWORK);
+
 register_structs! {
     ClockRegisters {
         (0x000 => tasks_hfclkstart: WriteOnly<u32, Control::Register>),
@@ -224,7 +227,6 @@ const CLOCK_BASE_NONSECURE: StaticRef<ClockRegisters> =
     unsafe { StaticRef::new(0x40005000 as *const ClockRegisters) };
 const CLOCK_BASE_SECURE: StaticRef<ClockRegisters> =
     unsafe { StaticRef::new(0x50005000 as *const ClockRegisters) };
-#[allow(dead_code)]
 const CLOCK_BASE_NETWORK: StaticRef<ClockRegisters> =
     unsafe { StaticRef::new(0x41005000 as *const ClockRegisters) };
 
@@ -273,13 +275,11 @@ pub trait ClockClient {
     fn event(&self);
 }
 
-pub static mut CLOCK: Clock = Clock::new();
-
 impl Clock {
     /// Constructor
-    pub const fn new() -> Clock {
+    const fn new(registers: StaticRef<ClockRegisters>) -> Clock {
         Clock {
-            registers: CLOCK_BASE_SECURE,
+            registers,
             client: OptionalCell::empty(),
         }
     }

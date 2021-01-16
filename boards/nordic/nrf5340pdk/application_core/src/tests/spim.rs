@@ -26,13 +26,13 @@ pub unsafe fn run(
     button3_pin: gpio::Pin,
     button4_pin: gpio::Pin,
 ) {
-    let mux_spi = components::spi::SpiMuxComponent::new(&nrf53::spi::SPI1)
+    let mux_spi = components::spi::SpiMuxComponent::new(&nrf53::spi::SPI1_APP)
         .finalize(components::spi_mux_component_helper!(nrf53::spi::SPI));
 
-    nrf53::gpio::PORT[csn].set();
-    nrf53::gpio::PORT[miso].make_input();
+    nrf53::gpio::PORT_APP[csn].set();
+    nrf53::gpio::PORT_APP[miso].make_input();
 
-    nrf53::spi::SPI1.configure(
+    nrf53::spi::SPI1_APP.configure(
         nrf53::pinmux::Pinmux::new(mosi as u32),
         nrf53::pinmux::Pinmux::new(miso as u32),
         nrf53::pinmux::Pinmux::new(sck as u32),
@@ -40,15 +40,15 @@ pub unsafe fn run(
         nrf53::spi::SpiRole::SPIM,
     );
 
-    WRITE_BUFFER[0] = 'Y' as u8;
-    WRITE_BUFFER[1] = 'E' as u8;
-    WRITE_BUFFER[2] = 'E' as u8;
-    WRITE_BUFFER[3] = 'T' as u8;
+    WRITE_BUFFER[0] = 'J' as u8;
+    WRITE_BUFFER[1] = 'U' as u8;
+    WRITE_BUFFER[2] = 'N' as u8;
+    WRITE_BUFFER[3] = 'K' as u8;
 
     let spi_test = static_init!(
         SpiTest,
         SpiTest::new(
-            VirtualSpiMasterDevice::new(mux_spi, &gpio::PORT[csn]),
+            VirtualSpiMasterDevice::new(mux_spi, &gpio::PORT_APP[csn]),
             &mut WRITE_BUFFER,
             &mut READ_BUFFER,
         )
@@ -92,8 +92,8 @@ impl ButtonHandler {
         led: gpio::Pin,
         button: gpio::Pin,
     ) -> ButtonHandler {
-        let led = unsafe { &gpio::PORT[led] };
-        let button = unsafe { &gpio::PORT[button] };
+        let led = unsafe { &gpio::PORT_APP[led] };
+        let button = unsafe { &gpio::PORT_APP[button] };
 
         led.make_output();
         button.make_input();

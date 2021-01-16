@@ -19,14 +19,14 @@ pub unsafe fn run(
     led3_pin: gpio::Pin,
     led4_pin: gpio::Pin,
 ) {
-    nrf53::gpio::PORT[mosi].make_input();
-    nrf53::gpio::PORT[sck].make_input();
-    nrf53::gpio::PORT[csn].make_input();
-    nrf53::gpio::PORT[csn].set_floating_state(FloatingState::PullUp);
-    nrf53::gpio::PORT[csn].enable_interrupts(InterruptEdge::FallingEdge);
-    nrf53::gpio::PORT[csn].set_client(&nrf53::spi::SPI1);
+    nrf53::gpio::PORT_APP[mosi].make_input();
+    nrf53::gpio::PORT_APP[sck].make_input();
+    nrf53::gpio::PORT_APP[csn].make_input();
+    nrf53::gpio::PORT_APP[csn].set_floating_state(FloatingState::PullUp);
+    nrf53::gpio::PORT_APP[csn].enable_interrupts(InterruptEdge::FallingEdge);
+    nrf53::gpio::PORT_APP[csn].set_client(&nrf53::spi::SPI1_APP);
 
-    nrf53::spi::SPI1.configure(
+    nrf53::spi::SPI1_APP.configure(
         nrf53::pinmux::Pinmux::new(mosi as u32),
         nrf53::pinmux::Pinmux::new(miso as u32),
         nrf53::pinmux::Pinmux::new(sck as u32),
@@ -37,7 +37,7 @@ pub unsafe fn run(
     let spi_test = static_init!(
         SpiTest,
         SpiTest::new(
-            &nrf53::spi::SPI1,
+            &nrf53::spi::SPI1_APP,
             &mut WRITE_BUFFER,
             &mut READ_BUFFER,
             led1_pin,
@@ -78,10 +78,10 @@ impl SpiTest {
         led3_pin: gpio::Pin,
         led4_pin: gpio::Pin,
     ) -> SpiTest {
-        let led1 = unsafe { &gpio::PORT[led1_pin] };
-        let led2 = unsafe { &gpio::PORT[led2_pin] };
-        let led3 = unsafe { &gpio::PORT[led3_pin] };
-        let led4 = unsafe { &gpio::PORT[led4_pin] };
+        let led1 = unsafe { &gpio::PORT_APP[led1_pin] };
+        let led2 = unsafe { &gpio::PORT_APP[led2_pin] };
+        let led3 = unsafe { &gpio::PORT_APP[led3_pin] };
+        let led4 = unsafe { &gpio::PORT_APP[led4_pin] };
 
         led1.make_output();
         led2.make_output();

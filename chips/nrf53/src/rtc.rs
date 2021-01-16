@@ -16,7 +16,6 @@ const RTC0_BASE_NONSECURE: StaticRef<RtcRegisters> =
     unsafe { StaticRef::new(0x40014000 as *const RtcRegisters) };
 const RTC0_BASE_SECURE: StaticRef<RtcRegisters> =
     unsafe { StaticRef::new(0x50014000 as *const RtcRegisters) };
-#[allow(dead_code)]
 const RTC0_BASE_NETWORK: StaticRef<RtcRegisters> =
     unsafe { StaticRef::new(0x41011000 as *const RtcRegisters) };
 
@@ -29,6 +28,16 @@ const RTC1_BASE_SECURE: StaticRef<RtcRegisters> =
 #[allow(dead_code)]
 const RTC1_BASE_NETWORK: StaticRef<RtcRegisters> =
     unsafe { StaticRef::new(0x41016000 as *const RtcRegisters) };
+
+pub static mut RTC0_APP: Rtc = Rtc {
+    registers: RTC0_BASE_SECURE,
+    callback: OptionalCell::empty(),
+};
+
+pub static mut RTC0_NET: Rtc = Rtc {
+    registers: RTC0_BASE_NETWORK,
+    callback: OptionalCell::empty(),
+};
 
 register_structs! {
     RtcRegisters {
@@ -152,11 +161,6 @@ pub struct Rtc<'a> {
     registers: StaticRef<RtcRegisters>,
     callback: OptionalCell<&'a dyn time::AlarmClient>,
 }
-
-pub static mut RTC: Rtc = Rtc {
-    registers: RTC0_BASE_SECURE,
-    callback: OptionalCell::empty(),
-};
 
 impl<'a> Controller for Rtc<'a> {
     type Config = &'a dyn time::AlarmClient;

@@ -8,21 +8,23 @@ use kernel::common::StaticRef;
 
 // Power management control
 #[allow(dead_code)]
-const POWER_BASE_NONSECURE: StaticRef<AppPowerRegisters> =
-    unsafe { StaticRef::new(0x40005000 as *const AppPowerRegisters) };
-const POWER_BASE_SECURE: StaticRef<AppPowerRegisters> =
-    unsafe { StaticRef::new(0x50005000 as *const AppPowerRegisters) };
-#[allow(dead_code)]
-const POWER_BASE_NETWORK: StaticRef<NetworkPowerRegisters> =
-    unsafe { StaticRef::new(0x41005000 as *const NetworkPowerRegisters) };
+const POWER_BASE_NONSECURE: StaticRef<PowerRegisters> =
+    unsafe { StaticRef::new(0x40005000 as *const PowerRegisters) };
+const POWER_BASE_SECURE: StaticRef<PowerRegisters> =
+    unsafe { StaticRef::new(0x50005000 as *const PowerRegisters) };
+const POWER_BASE_NETWORK: StaticRef<PowerRegisters> =
+    unsafe { StaticRef::new(0x41005000 as *const PowerRegisters) };
 
 // Network core voltage request control
 #[allow(dead_code)]
 const VREQCTRL_BASE: StaticRef<VReqCtrlRegisters> =
     unsafe { StaticRef::new(0x41004000 as *const VReqCtrlRegisters) };
 
+pub static mut POWER_APP: Power<'static> = Power::new(POWER_BASE_SECURE);
+pub static mut POWER_NET: Power<'static> = Power::new(POWER_BASE_NETWORK);
+
 register_structs! {
-    AppPowerRegisters {
+    PowerRegisters {
         (0x000 => _reserved0),
         /// Enable Constant Latency mode
         (0x078 => task_constlat: WriteOnly<u32, Task::Register>),
@@ -60,13 +62,13 @@ register_structs! {
         /// Reset reason
         (0x400 => resetreas: ReadWrite<u32, AppResetReason::Register>),
         (0x404 => _reserved8),
-        /// Main supply status
+        /// Main supply status (App core only)
         (0x428 => mainregstatus: ReadOnly<u32, MainSupply::Register>),
         (0x42C => _reserved9),
-        /// System OFF register
+        /// System OFF register (App core only)
         (0x500 => systemoff: WriteOnly<u32, Task::Register>),
         (0x504 => _reserved10),
-        /// Power failure comparator configuration
+        /// Power failure comparator configuration (App core only)
         (0x510 => pofcon: ReadWrite<u32, PowerFailure::Register>),
         (0x514 => _reserved11),
         /// General purpose retention register
@@ -74,63 +76,18 @@ register_structs! {
         /// General purpose retention register
         (0x520 => gpregret2: ReadWrite<u32, Byte::Register>),
         (0x524 => _reserved12),
-        /// Force off power and clock in network core
-        (0x614 => network_forceoff: ReadWrite<u32, Task::Register>),
+        /// Force off power and clock in network core (App core only)
+        (0x614 => network_forceoff: ReadWrite<u32, NetworkForceoff::Register>),
         (0x618 => _reserved13),
-        /// DC/DC enable for VREGMAIN
+        /// DC/DC enable for VREGMAIN (App core only)
         (0x704 => vregmain_dcdcen: ReadWrite<u32, Task::Register>),
         (0x708 => _reserved14),
-        /// DC/DC enable register for VREGRADIO
+        /// DC/DC enable register for VREGRADIO (App core only)
         (0x904 => vregradio_dcdcen: ReadWrite<u32, Task::Register>),
         (0x908 => _reserved15),
-        /// DC/DC enable register for VREGH
+        /// DC/DC enable register for VREGH (App core only)
         (0xB00 => vregh_dcdcen: ReadWrite<u32, Task::Register>),
         (0xB04 => @END),
-    },
-
-    NetworkPowerRegisters {
-        (0x000 => _reserved0),
-        /// Enable Constant Latency mode
-        (0x078 => task_constlat: WriteOnly<u32, Task::Register>),
-        /// Enable Low-power mode (variable latency)
-        (0x07C => task_lowpwr: WriteOnly<u32, Task::Register>),
-        (0x080 => _reserved1),
-        /// Subscribe configuration for Constant Latency mode
-        (0x0F8 => subscribe_constlat: ReadWrite<u32, DPPIConfig::Register>),
-        /// Subscribe configuration for Low-power mode
-        (0x0FC => subscribe_lowpwr: ReadWrite<u32, DPPIConfig::Register>),
-        (0x100 => _reserved2),
-        /// Power failure warning
-        (0x108 => event_pofwarn: ReadWrite<u32, Event::Register>),
-        (0x10C => _reserved3),
-        /// CPU entered WFI/WFE sleep
-        (0x114 => event_sleepenter: ReadWrite<u32, Event::Register>),
-        /// CPU exited WFI/WFE sleep
-        (0x118 => event_sleepexit: ReadWrite<u32, Event::Register>),
-        (0x11C => _reserved4),
-        /// Publish configuration for power failure warning event
-        (0x188 => publish_pofwarn: ReadWrite<u32, DPPIConfig::Register>),
-        (0x18C => _reserved5),
-        /// Publish configuration for sleep enter event
-        (0x194 => publish_sleepenter: ReadWrite<u32, DPPIConfig::Register>),
-        /// Publish configuration for sleep exit event
-        (0x198 => publish_sleepexit: ReadWrite<u32, DPPIConfig::Register>),
-        (0x19C => _reserved6),
-        /// Enable or disable interrupt
-        (0x300 => inten: ReadWrite<u32, Interrupt::Register>),
-        /// Enable interrupt
-        (0x304 => intenset: ReadWrite<u32, Interrupt::Register>),
-        /// Disable interrupt
-        (0x308 => intenclr: ReadWrite<u32, Interrupt::Register>),
-        (0x30C => _reserved7),
-        /// Reset reason
-        (0x400 => resetreas: ReadWrite<u32, NetworkResetReason::Register>),
-        (0x404 => _reserved8),
-        /// General purpose retention register
-        (0x51C => gpregret: ReadWrite<u32, Byte::Register>),
-        /// General purpose retention register
-        (0x520 => gpregret2: ReadWrite<u32, Byte::Register>),
-        (0x524 => @END),
     },
 
     VReqCtrlRegisters {
@@ -300,11 +257,18 @@ register_bitfields! [u32,
             Normal = 0,
             High = 1
         ]
+    ],
+
+    NetworkForceoff [
+        FORCEOFF OFFSET(0) NUMBITS(1) [
+            Release = 0,
+            Hold = 1
+        ]
     ]
 ];
 
 pub struct Power<'a> {
-    registers: StaticRef<AppPowerRegisters>,
+    registers: StaticRef<PowerRegisters>,
     client: OptionalCell<&'a dyn PowerClient>,
 }
 
@@ -328,9 +292,9 @@ pub trait PowerClient {
 }
 
 impl<'a> Power<'a> {
-    const fn new() -> Self {
+    const fn new(registers: StaticRef<PowerRegisters>) -> Self {
         Power {
-            registers: POWER_BASE_SECURE,
+            registers,
             client: OptionalCell::empty(),
         }
     }
@@ -399,6 +363,12 @@ impl<'a> Power<'a> {
             None => unreachable!(),
         }
     }
-}
 
-pub static mut POWER: Power<'static> = Power::new();
+    pub fn enable_network_core(&self) {
+        self.registers.network_forceoff.write(NetworkForceoff::FORCEOFF::Release);
+    }
+
+    pub fn disable_network_core(&self) {
+        self.registers.network_forceoff.write(NetworkForceoff::FORCEOFF::Hold);
+    }
+}

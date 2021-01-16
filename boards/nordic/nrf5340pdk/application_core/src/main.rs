@@ -124,7 +124,7 @@ const NUM_PROCS: usize = 8;
 static mut PROCESSES: [Option<&'static dyn kernel::procs::ProcessType>; NUM_PROCS] =
     [None; NUM_PROCS];
 
-static mut CHIP: Option<&'static nrf53::chip::NRF53> = None;
+static mut CHIP: Option<&'static nrf53::chip::NRF53<nrf53::interrupt_service::AppCoreInterruptService>> = None;
 
 /// Dummy buffer that causes the linker to reserve enough space for the stack.
 #[no_mangle]
@@ -177,19 +177,19 @@ pub unsafe fn reset_handler() {
         board_kernel,
         components::gpio_component_helper!(
             nrf53::gpio::GPIOPin,
-            0 => &nrf53::gpio::PORT[Pin::P1_01],
-            1 => &nrf53::gpio::PORT[Pin::P1_04],
-            2 => &nrf53::gpio::PORT[Pin::P1_05],
-            3 => &nrf53::gpio::PORT[Pin::P1_06],
-            4 => &nrf53::gpio::PORT[Pin::P1_07],
-            5 => &nrf53::gpio::PORT[Pin::P1_08],
-            6 => &nrf53::gpio::PORT[Pin::P1_09],
-            7 => &nrf53::gpio::PORT[Pin::P1_10],
-            8 => &nrf53::gpio::PORT[Pin::P1_11],
-            9 => &nrf53::gpio::PORT[Pin::P1_12],
-            10 => &nrf53::gpio::PORT[Pin::P1_13],
-            11 => &nrf53::gpio::PORT[Pin::P1_14],
-            12 => &nrf53::gpio::PORT[Pin::P1_15]
+            0 => &nrf53::gpio::PORT_APP[Pin::P1_01],
+            1 => &nrf53::gpio::PORT_APP[Pin::P1_04],
+            2 => &nrf53::gpio::PORT_APP[Pin::P1_05],
+            3 => &nrf53::gpio::PORT_APP[Pin::P1_06],
+            4 => &nrf53::gpio::PORT_APP[Pin::P1_07],
+            5 => &nrf53::gpio::PORT_APP[Pin::P1_08],
+            6 => &nrf53::gpio::PORT_APP[Pin::P1_09],
+            7 => &nrf53::gpio::PORT_APP[Pin::P1_10],
+            8 => &nrf53::gpio::PORT_APP[Pin::P1_11],
+            9 => &nrf53::gpio::PORT_APP[Pin::P1_12],
+            10 => &nrf53::gpio::PORT_APP[Pin::P1_13],
+            11 => &nrf53::gpio::PORT_APP[Pin::P1_14],
+            12 => &nrf53::gpio::PORT_APP[Pin::P1_15]
         ),
     )
     .finalize(components::gpio_component_buf!(nrf53::gpio::GPIOPin));
@@ -199,25 +199,26 @@ pub unsafe fn reset_handler() {
         components::button_component_helper!(
             nrf53::gpio::GPIOPin,
             (
-                &nrf53::gpio::PORT[BUTTON1_PIN],
+                &nrf53::gpio::PORT_APP[BUTTON1_PIN],
                 kernel::hil::gpio::ActivationMode::ActiveLow,
                 kernel::hil::gpio::FloatingState::PullUp
             ), //23
             (
-                &nrf53::gpio::PORT[BUTTON2_PIN],
+                &nrf53::gpio::PORT_APP[BUTTON2_PIN],
                 kernel::hil::gpio::ActivationMode::ActiveLow,
                 kernel::hil::gpio::FloatingState::PullUp
-            ), //24
+            )/*, //24
             (
-                &nrf53::gpio::PORT[BUTTON3_PIN],
+                &nrf53::gpio::PORT_APP[BUTTON3_PIN],
                 kernel::hil::gpio::ActivationMode::ActiveLow,
                 kernel::hil::gpio::FloatingState::PullUp
             ), //8
             (
-                &nrf53::gpio::PORT[BUTTON4_PIN],
+                &nrf53::gpio::PORT_APP[BUTTON4_PIN],
                 kernel::hil::gpio::ActivationMode::ActiveLow,
                 kernel::hil::gpio::FloatingState::PullUp
             ) //9
+            */
         ),
     )
     .finalize(components::button_component_buf!(nrf53::gpio::GPIOPin));
@@ -225,25 +226,29 @@ pub unsafe fn reset_handler() {
     let led = components::led::LedsComponent::new(components::led_component_helper!(
         nrf53::gpio::GPIOPin,
         (
-            &nrf53::gpio::PORT[LED1_PIN],
+            &nrf53::gpio::PORT_APP[LED1_PIN],
             kernel::hil::gpio::ActivationMode::ActiveLow
         ),
         (
-            &nrf53::gpio::PORT[LED2_PIN],
+            &nrf53::gpio::PORT_APP[LED2_PIN],
+            kernel::hil::gpio::ActivationMode::ActiveLow
+        )/*,
+        (
+            &nrf53::gpio::PORT_APP[LED3_PIN],
             kernel::hil::gpio::ActivationMode::ActiveLow
         ),
         (
-            &nrf53::gpio::PORT[LED3_PIN],
-            kernel::hil::gpio::ActivationMode::ActiveLow
-        ),
-        (
-            &nrf53::gpio::PORT[LED4_PIN],
+            &nrf53::gpio::PORT_APP[LED4_PIN],
             kernel::hil::gpio::ActivationMode::ActiveLow
         )
+        */
     ))
     .finalize(components::led_component_buf!(nrf53::gpio::GPIOPin));
 
-    let chip = static_init!(nrf53::chip::NRF53, nrf53::chip::NRF53::new());
+    let chip = static_init!(
+        nrf53::chip::NRF53<nrf53::interrupt_service::AppCoreInterruptService>,
+        nrf53::chip::NRF53::new()
+    );
     CHIP = Some(chip);
 
     // Create capabilities that the board needs to call certain protected kernel
@@ -252,15 +257,15 @@ pub unsafe fn reset_handler() {
         create_capability!(capabilities::ProcessManagementCapability);
     let main_loop_capability = create_capability!(capabilities::MainLoopCapability);
     let memory_allocation_capability = create_capability!(capabilities::MemoryAllocationCapability);
-    let gpio_port = &nrf53::gpio::PORT;
+    let gpio_port = &nrf53::gpio::PORT_APP;
     // Configure kernel debug gpios as early as possible
     kernel::debug::assign_gpios(
         Some(&gpio_port[LED1_PIN]),
         Some(&gpio_port[LED2_PIN]),
-        Some(&gpio_port[LED3_PIN]),
+        None, //Some(&gpio_port[LED3_PIN]),
     );
 
-    let rtc = &nrf53::rtc::RTC;
+    let rtc = &nrf53::rtc::RTC0_APP;
     rtc.start();
     let mux_alarm = components::alarm::AlarmMuxComponent::new(rtc)
         .finalize(components::alarm_mux_component_helper!(nrf53::rtc::Rtc));
@@ -289,13 +294,13 @@ pub unsafe fn reset_handler() {
             .finalize(components::segger_rtt_component_helper!(nrf53::rtc::Rtc));
         rtt
     } else {
-        nrf53::uart::UARTE0.initialize(
+        nrf53::uart::UARTE0_APP.initialize(
             nrf53::pinmux::Pinmux::new(UART_TXD as u32),
             nrf53::pinmux::Pinmux::new(UART_RXD as u32),
             UART_CTS.map(|x| nrf53::pinmux::Pinmux::new(x as u32)),
             UART_RTS.map(|x| nrf53::pinmux::Pinmux::new(x as u32)),
         );
-        &nrf53::uart::UARTE0
+        &nrf53::uart::UARTE0_APP
     };
 
     // Create a shared UART channel for the console and for kernel debug.
@@ -314,15 +319,15 @@ pub unsafe fn reset_handler() {
 
     // Start all of the clocks. Low power operation will require a better
     // approach than this.
-    nrf53::clock::CLOCK.low_stop();
-    nrf53::clock::CLOCK.high_stop();
+    nrf53::clock::CLOCK_APP.low_stop();
+    nrf53::clock::CLOCK_APP.high_stop();
 
-    nrf53::clock::CLOCK.low_set_source(nrf53::clock::LowClockSource::LFXO);
-    nrf53::clock::CLOCK.low_start();
-    nrf53::clock::CLOCK.high_set_source(nrf53::clock::HighClockSource::HFXO);
-    nrf53::clock::CLOCK.high_start();
-    while !nrf53::clock::CLOCK.low_started() {}
-    while !nrf53::clock::CLOCK.high_started() {}
+    nrf53::clock::CLOCK_APP.low_set_source(nrf53::clock::LowClockSource::LFXO);
+    nrf53::clock::CLOCK_APP.low_start();
+    nrf53::clock::CLOCK_APP.high_set_source(nrf53::clock::HighClockSource::HFXO);
+    nrf53::clock::CLOCK_APP.high_start();
+    while !nrf53::clock::CLOCK_APP.low_started() {}
+    while !nrf53::clock::CLOCK_APP.high_started() {}
 
     let platform = Platform {
         alarm,
@@ -340,35 +345,12 @@ pub unsafe fn reset_handler() {
 
     // Run optional kernel tests.
     //
-    //tests::blink::run(mux_alarm, LED4_PIN, BUTTON4_PIN);
-    /*
-    tests::spim::run(
-        Pin::P1_04,
-        Pin::P1_05,
-        Pin::P1_06,
-        Pin::P1_07,
-        LED1_PIN,
-        LED2_PIN,
-        LED3_PIN,
-        LED4_PIN,
-        BUTTON1_PIN,
-        BUTTON2_PIN,
-        BUTTON3_PIN,
-        BUTTON4_PIN,
-    );
-    */
-    /*
-    tests::spis::run(
-        Pin::P1_04, 
-        Pin::P1_05, 
-        Pin::P1_06, 
-        Pin::P1_07, 
-        LED1_PIN,
-        LED2_PIN,
-        LED3_PIN,
-        LED4_PIN,
-    );
-    */
+    nrf53::gpio::PORT_APP[LED3_PIN].select_core(nrf53::Core::Network);
+    nrf53::gpio::PORT_APP[LED4_PIN].select_core(nrf53::Core::Network);
+    nrf53::gpio::PORT_APP[BUTTON3_PIN].select_core(nrf53::Core::Network);
+    nrf53::gpio::PORT_APP[BUTTON4_PIN].select_core(nrf53::Core::Network);
+    nrf53::power::POWER_APP.enable_network_core();
+    tests::blink::run(mux_alarm, LED2_PIN, BUTTON2_PIN);
 
     /// These symbols are defined in the linker script.
     extern "C" {

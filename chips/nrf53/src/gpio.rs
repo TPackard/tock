@@ -1,6 +1,7 @@
 //! GPIO and GPIOTE (task and events), nRF53. Based on nRF5x GPIO and GPIOTE driver by Philip
 //! Levis.
 
+use crate::Core;
 use core::ops::{Index, IndexMut};
 use enum_primitive::cast::FromPrimitive;
 use enum_primitive::enum_from_primitive;
@@ -23,7 +24,6 @@ const GPIOTE0_BASE: StaticRef<GpioteRegisters> =
 #[allow(dead_code)]
 const GPIOTE1_BASE: StaticRef<GpioteRegisters> =
     unsafe { StaticRef::new(0x4002F000 as *const GpioteRegisters) };
-#[allow(dead_code)]
 const GPIOTE_BASE_NETWORK: StaticRef<GpioteRegisters> =
     unsafe { StaticRef::new(0x4100A000 as *const GpioteRegisters) };
 
@@ -274,59 +274,114 @@ enum_from_primitive! {
     }
 }
 
-static mut PINS: [GPIOPin; 48] = [
-    GPIOPin::new(Pin::P0_00),
-    GPIOPin::new(Pin::P0_01),
-    GPIOPin::new(Pin::P0_02),
-    GPIOPin::new(Pin::P0_03),
-    GPIOPin::new(Pin::P0_04),
-    GPIOPin::new(Pin::P0_05),
-    GPIOPin::new(Pin::P0_06),
-    GPIOPin::new(Pin::P0_07),
-    GPIOPin::new(Pin::P0_08),
-    GPIOPin::new(Pin::P0_09),
-    GPIOPin::new(Pin::P0_10),
-    GPIOPin::new(Pin::P0_11),
-    GPIOPin::new(Pin::P0_12),
-    GPIOPin::new(Pin::P0_13),
-    GPIOPin::new(Pin::P0_14),
-    GPIOPin::new(Pin::P0_15),
-    GPIOPin::new(Pin::P0_16),
-    GPIOPin::new(Pin::P0_17),
-    GPIOPin::new(Pin::P0_18),
-    GPIOPin::new(Pin::P0_19),
-    GPIOPin::new(Pin::P0_20),
-    GPIOPin::new(Pin::P0_21),
-    GPIOPin::new(Pin::P0_22),
-    GPIOPin::new(Pin::P0_23),
-    GPIOPin::new(Pin::P0_24),
-    GPIOPin::new(Pin::P0_25),
-    GPIOPin::new(Pin::P0_26),
-    GPIOPin::new(Pin::P0_27),
-    GPIOPin::new(Pin::P0_28),
-    GPIOPin::new(Pin::P0_29),
-    GPIOPin::new(Pin::P0_30),
-    GPIOPin::new(Pin::P0_31),
-    GPIOPin::new(Pin::P1_00),
-    GPIOPin::new(Pin::P1_01),
-    GPIOPin::new(Pin::P1_02),
-    GPIOPin::new(Pin::P1_03),
-    GPIOPin::new(Pin::P1_04),
-    GPIOPin::new(Pin::P1_05),
-    GPIOPin::new(Pin::P1_06),
-    GPIOPin::new(Pin::P1_07),
-    GPIOPin::new(Pin::P1_08),
-    GPIOPin::new(Pin::P1_09),
-    GPIOPin::new(Pin::P1_10),
-    GPIOPin::new(Pin::P1_11),
-    GPIOPin::new(Pin::P1_12),
-    GPIOPin::new(Pin::P1_13),
-    GPIOPin::new(Pin::P1_14),
-    GPIOPin::new(Pin::P1_15),
+static mut GPIOTE0_PINS: [GPIOPin; 48] = [
+    GPIOPin::new(Pin::P0_00, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_01, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_02, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_03, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_04, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_05, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_06, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_07, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_08, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_09, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_10, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_11, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_12, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_13, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_14, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_15, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_16, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_17, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_18, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_19, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_20, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_21, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_22, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_23, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_24, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_25, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_26, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_27, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_28, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_29, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_30, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P0_31, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_00, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_01, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_02, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_03, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_04, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_05, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_06, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_07, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_08, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_09, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_10, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_11, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_12, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_13, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_14, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
+    GPIOPin::new(Pin::P1_15, GPIO_BASE_ADDRESS_SECURE, GPIOTE0_BASE),
 ];
 
-pub static mut PORT: Port = Port {
-    pins: unsafe { &mut PINS },
+static mut NETWORK_PINS: [GPIOPin; 48] = [
+    GPIOPin::new(Pin::P0_00, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_01, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_02, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_03, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_04, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_05, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_06, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_07, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_08, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_09, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_10, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_11, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_12, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_13, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_14, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_15, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_16, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_17, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_18, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_19, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_20, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_21, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_22, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_23, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_24, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_25, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_26, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_27, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_28, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_29, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_30, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P0_31, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_00, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_01, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_02, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_03, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_04, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_05, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_06, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_07, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_08, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_09, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_10, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_11, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_12, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_13, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_14, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+    GPIOPin::new(Pin::P1_15, GPIO_BASE_ADDRESS_NETWORK, GPIOTE_BASE_NETWORK),
+];
+
+pub static mut PORT_APP: Port = Port {
+    pins: unsafe { &mut GPIOTE0_PINS },
+};
+
+pub static mut PORT_NET: Port = Port {
+    pins: unsafe { &mut NETWORK_PINS },
 };
 
 pub struct GPIOPin<'a> {
@@ -338,15 +393,15 @@ pub struct GPIOPin<'a> {
 }
 
 impl<'a> GPIOPin<'a> {
-    pub const fn new(pin: Pin) -> GPIOPin<'a> {
+    const fn new(pin: Pin, gpio_base_address: usize, gpiote_registers: StaticRef<GpioteRegisters>) -> GPIOPin<'a> {
         GPIOPin {
             pin: ((pin as usize) % GPIO_PER_PORT) as u8,
             port: ((pin as usize) / GPIO_PER_PORT) as u8,
             client: OptionalCell::empty(),
-            gpiote_registers: GPIOTE0_BASE,
+            gpiote_registers,
             gpio_registers: unsafe {
                 StaticRef::new(
-                    (GPIO_BASE_ADDRESS_SECURE + ((pin as usize) / GPIO_PER_PORT) * GPIO_SIZE)
+                    (gpio_base_address + ((pin as usize) / GPIO_PER_PORT) * GPIO_SIZE)
                         as *const GpioRegisters,
                 )
             },
@@ -504,6 +559,17 @@ impl<'a> hil::gpio::Interrupt<'a> for GPIOPin<'a> {
 impl<'a> hil::gpio::InterruptPin<'a> for GPIOPin<'a> {}
 
 impl GPIOPin<'_> {
+    /// Select which core controls the GPIO pin
+    pub fn select_core(&self, core: Core) {
+        let gpio_regs = &*self.gpio_registers;
+        let core_sel = match core {
+            Core::Application => PinConfig::MCUSEL::AppMCU,
+            Core::Network => PinConfig::MCUSEL::NetworkMCU,
+        };
+
+        gpio_regs.pin_cnf[self.pin as usize].modify(core_sel);
+    }
+
     /// Allocate a GPIOTE channel
     /// If the channel couldn't be allocated return error instead
     fn allocate_channel(&self) -> Result<usize, ()> {

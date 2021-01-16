@@ -19,13 +19,24 @@ static mut BYTE: u8 = 0;
 
 // NOTE: UARTE2 and UARTE3 are not functional as of Sept. 2020 (see nRF5340 errata #84).
 #[allow(dead_code)]
-const UARTE_BASE_NONSECURE: StaticRef<UarteRegisters> =
+const UARTE0_BASE_NONSECURE: StaticRef<UarteRegisters> =
     unsafe { StaticRef::new(0x40008000 as *const UarteRegisters) };
-const UARTE_BASE_SECURE: StaticRef<UarteRegisters> =
+const UARTE0_BASE_SECURE: StaticRef<UarteRegisters> =
     unsafe { StaticRef::new(0x50008000 as *const UarteRegisters) };
+
 #[allow(dead_code)]
-const UARTE_BASE_NETWORK: StaticRef<UarteRegisters> =
+const UARTE1_BASE_NONSECURE: StaticRef<UarteRegisters> =
+    unsafe { StaticRef::new(0x40009000 as *const UarteRegisters) };
+#[allow(dead_code)]
+const UARTE1_BASE_SECURE: StaticRef<UarteRegisters> =
+    unsafe { StaticRef::new(0x50009000 as *const UarteRegisters) };
+
+const UARTE0_BASE_NETWORK: StaticRef<UarteRegisters> =
     unsafe { StaticRef::new(0x41013000 as *const UarteRegisters) };
+
+// These should only be accessed by the reset_handler on startup
+pub static mut UARTE0_APP: Uarte = Uarte::new(UARTE0_BASE_SECURE);
+pub static mut UARTE0_NET: Uarte = Uarte::new(UARTE0_BASE_NETWORK);
 
 register_structs! {
     UarteRegisters {
@@ -284,15 +295,11 @@ pub struct UARTParams {
     pub baud_rate: u32,
 }
 
-/// UARTE0 handle
-// This should only be accessed by the reset_handler on startup
-pub static mut UARTE0: Uarte = Uarte::new();
-
 impl<'a> Uarte<'a> {
     /// Constructor
-    pub const fn new() -> Uarte<'a> {
+    const fn new(registers: StaticRef<UarteRegisters>) -> Uarte<'a> {
         Uarte {
-            registers: UARTE_BASE_SECURE,
+            registers,
             tx_client: OptionalCell::empty(),
             tx_buffer: kernel::common::cells::TakeCell::empty(),
             tx_len: Cell::new(0),

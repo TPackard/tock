@@ -31,8 +31,8 @@ struct Blink<A: Alarm<'static>> {
 
 impl<A: Alarm<'static>> Blink<A> {
     fn new(alarm: A, led_pin: gpio::Pin, button_pin: gpio::Pin) -> Blink<A> {
-        let led = unsafe { &gpio::PORT[led_pin] };
-        let button = unsafe { &gpio::PORT[button_pin] };
+        let led = unsafe { &gpio::PORT_NET[led_pin] };
+        let button = unsafe { &gpio::PORT_NET[button_pin] };
 
         led.make_output();
         button.make_input();

@@ -1,9 +1,10 @@
+use crate::app_peripheral_ids;
 use crate::gpio;
+use crate::net_peripheral_ids;
 use crate::power;
 use crate::rtc;
 use crate::spi;
 use crate::uart;
-use crate::peripheral_interrupts;
 
 /// Interface for handling interrupts on a hardware chip.
 ///
@@ -47,30 +48,48 @@ use crate::peripheral_interrupts;
 /// there is an interrupt ready then that interrupt is passed through the crates
 /// until something can service it.
 pub trait InterruptService {
+    unsafe fn new() -> Self;
+
     /// Service an interrupt, if supported by this chip. If this interrupt number is not supported,
     /// return false.
     unsafe fn service_interrupt(&self, interrupt: u32) -> bool;
 }
 
-pub struct Nrf53InterruptService<'a> {
-    gpio_port: &'a gpio::Port<'a>,
-}
+pub struct AppCoreInterruptService {}
 
-impl<'a> Nrf53InterruptService<'a> {
-    pub unsafe fn new(gpio_port: &'a gpio::Port<'a>) -> Nrf53InterruptService<'a> {
-        Nrf53InterruptService { gpio_port }
+impl InterruptService for AppCoreInterruptService {
+    unsafe fn new() -> AppCoreInterruptService {
+        AppCoreInterruptService {}
+    }
+
+    unsafe fn service_interrupt(&self, interrupt: u32) -> bool {
+        match interrupt {
+            app_peripheral_ids::GPIOTE0 => gpio::PORT_APP.handle_interrupt(),
+            app_peripheral_ids::POWER_CLOCK_RESET => power::POWER_APP.handle_interrupt(),
+            app_peripheral_ids::RTC0 => rtc::RTC0_APP.handle_interrupt(),
+            // TODO: forward to proper peripheral
+            app_peripheral_ids::SPI_TWI_UARTE0 => uart::UARTE0_APP.handle_interrupt(),
+            app_peripheral_ids::SPI_TWI_UARTE1 => spi::SPI1_APP.handle_interrupt(),
+            _ => return false,
+        }
+        true
     }
 }
 
-impl InterruptService for Nrf53InterruptService<'_> {
+pub struct NetCoreInterruptService {}
+
+impl InterruptService for NetCoreInterruptService {
+    unsafe fn new() -> NetCoreInterruptService {
+        NetCoreInterruptService {}
+    }
+
     unsafe fn service_interrupt(&self, interrupt: u32) -> bool {
         match interrupt {
-            peripheral_interrupts::GPIOTE0 => self.gpio_port.handle_interrupt(),
-            peripheral_interrupts::POWER => power::POWER.handle_interrupt(),
-            peripheral_interrupts::RTC0 => rtc::RTC.handle_interrupt(),
+            net_peripheral_ids::GPIOTE => gpio::PORT_NET.handle_interrupt(),
+            net_peripheral_ids::POWER_CLOCK_RESET => power::POWER_NET.handle_interrupt(),
+            net_peripheral_ids::RTC0 => rtc::RTC0_NET.handle_interrupt(),
             // TODO: forward to proper peripheral
-            peripheral_interrupts::SPI_TWI_UARTE0 => uart::UARTE0.handle_interrupt(),
-            peripheral_interrupts::SPI_TWI_UARTE1 => spi::SPI1.handle_interrupt(),
+            net_peripheral_ids::SPI_TWI_UARTE0 => spi::SPI0_NET.handle_interrupt(),
             _ => return false,
         }
         true
